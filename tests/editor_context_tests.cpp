@@ -6,6 +6,7 @@
 #include "search.h"
 #include "settings.h"
 #include "utils.h"
+#include "clipboard_snapshot.h"
 #include <iostream>
 #include <memory>
 #include <windowsx.h>
@@ -64,6 +65,16 @@ bool clipboardEquals(App& app, const std::wstring& expected) {
     }
     return false;
 }
+std::wstring oleClipboardText() {
+    // Reads the clipboard the way OLE applications such as Word paste it.
+    Microsoft::WRL::ComPtr<IDataObject> clipboard; std::wstring text;
+    FORMATETC format{CF_UNICODETEXT,nullptr,DVASPECT_CONTENT,-1,TYMED_HGLOBAL}; STGMEDIUM medium{};
+    if (SUCCEEDED(OleGetClipboard(clipboard.GetAddressOf())) && SUCCEEDED(clipboard->GetData(&format,&medium))) {
+        if (auto chars = static_cast<const wchar_t*>(GlobalLock(medium.hGlobal))) { text = chars; GlobalUnlock(medium.hGlobal); }
+        ReleaseStgMedium(&medium);
+    }
+    return text;
+}
 void menuAction(App& app, int action) {
     for (const auto& hit : app.editCtxHits) if (hit.second == action) {
         auto rect = hit.first;
@@ -96,6 +107,49 @@ void outside(App& app, D2D1_POINT_2F point, size_t expected) {
           "right-click outside clears selection and disables Cut/Copy");
     check(app.editorCursorPos == expected, "outside right-click relocates the insertion point");
     closeEditCtxMenu(app);
+}
+// Clipboard actions use the selected source, and Cut remains undoable. A
+// running OLE application owns the clipboard first, as after copying from a
+// browser or terminal: restoring that through OleGetClipboard's live proxy
+// overflowed the stack in ole32 and ended these tests with 0xc000041d.
+void clipboardActions(App& app, const std::wstring& source) {
+    ClipboardSnapshot user(app.hwnd);
+    check(user.captured, "user clipboard is preserved");
+    if (!user.captured) return;
+    const std::wstring elsewhere = L"Copied in another application \u4e2d\u6587";
+    OleClipboardSource running(elsewhere);
+    check(running.owned && clipboardEquals(app,elsewhere), "a running OLE application owns the clipboard");
+    {
+        ClipboardSnapshot saved(app.hwnd);
+        check(saved.captured, "the other application's clipboard is captured");
+        size_t word = source.find(L"selection");
+        app.editorText = source; rebuildLineStarts(app); select(app,word,word+9);
+        auto point = characterPoint(app,word+2); right(app,point); menuAction(app,101);
+        check(clipboardEquals(app,L"selection") && app.editorText == source && app.editorHasSelection,
+              "menu Copy copies exactly the selection without changing the source or selection");
+        right(app,point); menuAction(app,100);
+        check(clipboardEquals(app,L"selection") && app.editorText == source.substr(0,word)+source.substr(word+9),
+              "menu Cut removes exactly the selected source text");
+        key(app,'Z',false,true); check(app.editorText == source,"Undo restores context-menu Cut");
+        size_t unicode = source.find(L"Unicode clusters: ") + 18;
+        size_t end = source.find(L'.',unicode);
+        select(app,unicode,end);
+        auto unicodePoint = characterPoint(app,unicode);
+        app.editorScrollY = std::max(0.0f,unicodePoint.y-180.0f);
+        right(app,characterPoint(app,unicode));
+        check(app.editorHasSelection && app.editorSelStart == unicode && app.editorSelEnd == end,
+              "Unicode selection survives opening the menu");
+        menuAction(app,101);
+        auto copied = clipboardLine(app.hwnd);
+        if (copied != source.substr(unicode,end-unicode))
+            std::cerr << "Clipboard Unicode mismatch: expected length " << end-unicode
+                      << ", actual length " << copied.size() << ", previous ASCII copy "
+                      << (copied == L"selection") << ", menu still open " << app.editCtxOpen << '\n';
+        check(clipboardEquals(app,source.substr(unicode,end-unicode)),
+              "menu Copy preserves emoji, combining marks and Chinese text");
+    }
+    check(clipboardEquals(app,elsewhere), "the other application's clipboard is restored");
+    check(oleClipboardText() == elsewhere, "OLE applications can paste the restored clipboard");
 }
 }
 
@@ -181,40 +235,7 @@ int runEditorContextTests() {
     select(app,0,8); auto outsidePoint = caretAt(app,8); outsidePoint.x += 40; outsidePoint.y += mid;
     outside(app,outsidePoint,8);
     select(app,0,app.editorText.size()); outside(app,{outsidePoint.x,800},app.editorText.size());
-    // Clipboard actions use the selected source, and Cut remains undoable.
-    Microsoft::WRL::ComPtr<IDataObject> clipboard;
-    HRESULT saved = OleGetClipboard(clipboard.GetAddressOf());
-    check(SUCCEEDED(saved), "user clipboard is preserved");
-    if (SUCCEEDED(saved)) {
-        app.editorText = source; rebuildLineStarts(app); select(app,word,word+9);
-        point = characterPoint(app,word+2); right(app,point); menuAction(app,101);
-        check(clipboardEquals(app,L"selection") && app.editorText == source && app.editorHasSelection,
-              "menu Copy copies exactly the selection without changing the source or selection");
-        right(app,point); menuAction(app,100);
-        check(clipboardEquals(app,L"selection") && app.editorText == source.substr(0,word)+source.substr(word+9),
-              "menu Cut removes exactly the selected source text");
-        key(app,'Z',false,true); check(app.editorText == source,"Undo restores context-menu Cut");
-        size_t unicode = source.find(L"Unicode clusters: ") + 18;
-        size_t end = source.find(L'.',unicode);
-        select(app,unicode,end);
-        auto unicodePoint = characterPoint(app,unicode);
-        app.editorScrollY = std::max(0.0f,unicodePoint.y-180.0f);
-        right(app,characterPoint(app,unicode));
-        check(app.editorHasSelection && app.editorSelStart == unicode && app.editorSelEnd == end,
-              "Unicode selection survives opening the menu");
-        menuAction(app,101);
-        auto copied = clipboardLine(app.hwnd);
-        if (copied != source.substr(unicode,end-unicode))
-            std::cerr << "Clipboard Unicode mismatch: expected length " << end-unicode
-                      << ", actual length " << copied.size() << ", previous ASCII copy "
-                      << (copied == L"selection") << ", menu still open " << app.editCtxOpen << '\n';
-        check(clipboardEquals(app,source.substr(unicode,end-unicode)),
-              "menu Copy preserves emoji, combining marks and Chinese text");
-        HRESULT restored = E_FAIL;
-        for (int i=0;i<10 && FAILED(restored=OleSetClipboard(clipboard.Get()));++i) Sleep(20);
-        check(SUCCEEDED(restored),"user clipboard is restored");
-        if (SUCCEEDED(restored)) OleFlushClipboard();
-    }
+    clipboardActions(app,source);
     app.editorText = source; app.editorDirty = false;
     DestroyWindow(app.hwnd); app.hwnd = nullptr; state.reset(); CoUninitialize();
     OleUninitialize();
