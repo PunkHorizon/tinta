@@ -1919,6 +1919,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     app.tabSearchEnabled = savedSettings.tabSearchEnabled;
     app.browserFocusPath = savedSettings.browserFocusPath;
     app.openInTabs = savedSettings.openInTabs;
+    app.keepDeletedTabs = savedSettings.keepDeletedTabs;
     app.editorAssists = savedSettings.editorAssists;
     app.showWordCount = savedSettings.showWordCount;
     app.printMarginMm = savedSettings.printMarginMm;

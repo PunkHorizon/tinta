@@ -235,6 +235,39 @@ int runTabDropTests() {
           "releasing over the source content launches a positioned window with the Unicode path intact");
     check(app.tabs.size() == 2 && app.tabs[0].path == paths[0] && app.tabs[1].path == paths[2],
           "successful tear-off removes only the transferred tab");
+    // The source must survive a path-only tear-off if neighbors disappear.
+    const int missingNeighborsX = armDrag();
+    fs::remove(fs::path(toWide(paths[0])));
+    fs::remove(fs::path(toWide(paths[2])));
+    tabDragMove(app, app.hwnd, missingNeighborsX, detachY);
+    tabDragEnd(app, app.hwnd, missingNeighborsX, detachY);
+    check(app.activeTab >= 0 && app.activeTab < (int)app.tabs.size() &&
+          app.currentFile.empty() && app.tabs[app.activeTab].path.empty(),
+          "tear-off beside missing neighbors leaves a valid launcher in the source");
+    for (int index : {0, 2}) std::ofstream(fs::path(toWide(paths[index])), std::ios::binary) << fixture;
+
+    // A retained deleted tab cannot transfer its content through the path-only protocol.
+    tabsSetKeepDeleted(app, true);
+    const int cachedX = armDrag();
+    fs::remove(fs::path(toWide(paths[3])));
+    tabDragMove(app, app.hwnd, cachedX, detachY);
+    check(!app.tabDragDetached && app.tabs.size() == 3,
+          "a cached missing document stays in its source window instead of tearing off");
+    check(!tabSendDrop(app.hwnd, paths[3], dropPoint),
+          "a missing path cannot be acknowledged as a successful content transfer");
+    tabDragCancel(app, app.hwnd);
+    std::ofstream(fs::path(toWide(paths[3])), std::ios::binary) << fixture;
+    tabsSetKeepDeleted(app, false);
+
+    // Deletion can also happen after the ghost was created, before release.
+    const int vanishedX = armDrag();
+    tabDragMove(app, app.hwnd, vanishedX, detachY);
+    check(app.tabDragDetached, "an existing file initially arms tear-off");
+    fs::remove(fs::path(toWide(paths[3])));
+    tabDragEnd(app, app.hwnd, vanishedX, detachY);
+    check(app.tabs.size() == 3 && app.activeTab == 1 && app.currentFile == paths[3],
+          "deletion during a drag cancels transfer without closing the source tab");
+    std::ofstream(fs::path(toWide(paths[3])), std::ios::binary) << fixture;
     ShowWindow(app.hwnd, SW_HIDE);
     app.tabs.resize(1);
     app.activeTab = 0;

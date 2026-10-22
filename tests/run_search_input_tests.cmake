@@ -3,7 +3,7 @@ file(COPY "${TEST_BINARY}" DESTINATION "${TEST_DIR}")
 file(WRITE "${TEST_DIR}/settings.ini" "[Settings]\nhasAskedFileAssociation=1\ncheckUpdates=0\n")
 get_filename_component(TEST_NAME "${TEST_BINARY}" NAME)
 execute_process(COMMAND "${TEST_DIR}/${TEST_NAME}" --search-input-tests
-    WORKING_DIRECTORY "${TEST_DIR}" RESULT_VARIABLE result)
+    WORKING_DIRECTORY "${TEST_DIR}" RESULT_VARIABLE result TIMEOUT 30)
 if(NOT result EQUAL 0)
     message(FATAL_ERROR "Find/table input tests failed: ${result}")
 endif()

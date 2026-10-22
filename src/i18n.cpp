@@ -54,6 +54,8 @@ const Entry kEntries[] = {
     { "fm.label.off", L"Off", nullptr, nullptr, nullptr },
     { "fm.all", L"All", nullptr, nullptr, nullptr },
     { "theme.editor.default_name", L"My theme", nullptr, nullptr, nullptr },
+    { "settings.keep_deleted_tabs", L"Keep deleted files in memory", nullptr, nullptr, nullptr },
+    { "settings.keep_deleted_tabs.hint", L"Increases RAM usage; until Tinta closes", nullptr, nullptr, nullptr },
     { "toast.file_missing", L"File not found:", L"\u627e\u4e0d\u5230\u6587\u4ef6\uff1a", L"\u30d5\u30a1\u30a4\u30eb\u304c\u898b\u3064\u304b\u308a\u307e\u305b\u3093\uff1a", L"\ud30c\uc77c\uc744 \ucc3e\uc744 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4:" },
     { "toast.file_no_app", L"No default app is set for this file:", L"\u672a\u8bbe\u7f6e\u6253\u5f00\u6b64\u6587\u4ef6\u7684\u9ed8\u8ba4\u5e94\u7528\uff1a", L"\u3053\u306e\u30d5\u30a1\u30a4\u30eb\u306e\u65e2\u5b9a\u306e\u30a2\u30d7\u30ea\u304c\u8a2d\u5b9a\u3055\u308c\u3066\u3044\u307e\u305b\u3093\uff1a", L"\uc774 \ud30c\uc77c\uc758 \uae30\ubcf8 \uc571\uc774 \uc124\uc815\ub418\uc5b4 \uc788\uc9c0 \uc54a\uc2b5\ub2c8\ub2e4:" },
     { "toast.file_open_failed", L"Could not open file:", L"\u65e0\u6cd5\u6253\u5f00\u6587\u4ef6\uff1a", L"\u30d5\u30a1\u30a4\u30eb\u3092\u958b\u3051\u307e\u305b\u3093\u3067\u3057\u305f\uff1a", L"\ud30c\uc77c\uc744 \uc5f4 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4:" },

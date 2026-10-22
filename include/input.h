@@ -19,6 +19,9 @@ void handleDropFiles(App& app, HWND hwnd, WPARAM wParam);
 // Load a document into the viewer, saving the outgoing reading position
 // and restoring the incoming one (shared with tabs.cpp)
 bool openDocumentInViewer(App& app, const std::wstring& fullPath);
+// Same document setup for a tab's cached source when its file disappeared.
+bool openDocumentSourceInViewer(App& app, const std::wstring& fullPath,
+                                const std::string& source);
 // Mouse XBUTTON / Alt+arrow navigation across link jumps (viewer)
 void navigateBack(App& app, HWND hwnd);
 void navigateForward(App& app, HWND hwnd);

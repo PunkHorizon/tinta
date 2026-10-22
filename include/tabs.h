@@ -10,6 +10,7 @@
 
 // Model
 void tabsInit(App& app);                       // adopt the startup document
+void tabsSetKeepDeleted(App& app, bool enabled);
 // Rebuild the row from last session's paths (startup doc becomes active)
 void tabsSeedSession(App& app, const std::vector<std::string>& paths);
 void tabActivate(App& app, HWND hwnd, int index);

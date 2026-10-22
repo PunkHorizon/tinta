@@ -195,6 +195,9 @@ void focusTransfers(App& app) {
     type(app, L"replaced"); key(app, VK_RETURN, 13);
     check(app.editorText.find(L"replaced") != std::wstring::npos, "Enter replaces the current match");
     app.currentFile = std::filesystem::absolute("find-table-focus-save.md").string();
+    // This checks normal-save focus, not deleted-file recovery. A missing
+    // original now intentionally opens Save As; create the destination first.
+    std::ofstream(app.currentFile, std::ios::binary) << toUtf8(app.editorText);
     key(app, 'S', 19, true);
     std::ifstream saved(app.currentFile, std::ios::binary);
     std::string savedText{std::istreambuf_iterator<char>(saved), std::istreambuf_iterator<char>()};

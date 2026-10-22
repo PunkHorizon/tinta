@@ -254,11 +254,17 @@ bool openDocumentInViewer(App& app, const std::wstring& fullPath) {
     if (!file) return false;
     std::stringstream buffer;
     buffer << file.rdbuf();
-    auto result = parseDocument(app.parser, buffer.str(), fullPath);
+    if (file.bad()) return false;
+    return openDocumentSourceInViewer(app, fullPath, buffer.str());
+}
+
+bool openDocumentSourceInViewer(App& app, const std::wstring& fullPath,
+                                const std::string& source) {
+    auto result = parseDocument(app.parser, source, fullPath);
     if (!result.success) return false;
 
     // Review annotations (#126): keep the raw source and derive marks from it
-    app.sourceText = buffer.str();
+    app.sourceText = source;
     annotationsParseSource(app);
     if (app.annotEditorOpen) annotationEditorCancel(app);
     if (app.showLightbox) closeLightbox(app);
@@ -711,6 +717,13 @@ static void settingsAction(App& app, HWND hwnd, int action) {
             // from clobbering it (they no longer write this flag)
             persistOpenInTabs(app);
             break;
+        case SET_TOGGLE_KEEPDELETED: {
+            tabsSetKeepDeleted(app, !app.keepDeletedTabs);
+            Settings settings = loadSettings();
+            settings.keepDeletedTabs = app.keepDeletedTabs;
+            saveSettings(settings);
+            break;
+        }
         case SET_TOGGLE_ASSISTS:
             app.editorAssists = !app.editorAssists;
             persistEditorMode(app);
@@ -2526,6 +2539,7 @@ static bool navOpenEntry(App& app, HWND hwnd, const App::NavEntry& entry) {
                 (int)i == app.activeTab ? app.currentFile : app.tabs[i].path;
             if (_stricmp(existing.c_str(), entry.path.c_str()) == 0) {
                 tabActivate(app, hwnd, (int)i);
+                if (app.activeTab != (int)i) return false;
                 found = true;
                 break;
             }

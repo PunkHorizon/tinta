@@ -62,6 +62,7 @@ void saveSettings(const Settings& settings) {
     file << "tabSearchEnabled=" << (settings.tabSearchEnabled ? 1 : 0) << "\n";
     file << "browserFocusPath=" << (settings.browserFocusPath ? 1 : 0) << "\n";
     file << "openInTabs=" << (settings.openInTabs ? 1 : 0) << "\n";
+    file << "keepDeletedTabs=" << (settings.keepDeletedTabs ? 1 : 0) << "\n";
     file << "readingWidthPct=" << settings.readingWidthPct << "\n";
     file << "zenWidthPct=" << settings.zenWidthPct << "\n";
     file << "headingRules=" << (settings.headingRules ? 1 : 0) << "\n";
@@ -347,6 +348,8 @@ Settings loadSettings() {
             settings.browserFocusPath = (value == "1");
         } else if (key == "openInTabs") {
             settings.openInTabs = (value == "1");
+        } else if (key == "keepDeletedTabs") {
+            settings.keepDeletedTabs = (value == "1");
         } else if (key == "checkUpdates") {
             settings.checkUpdates = (value == "1");
         } else if (key == "lastUpdateCheck") {

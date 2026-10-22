@@ -155,6 +155,7 @@ void settingsDismissal() {
 
 int runTabDropTests();
 int runTabHoverCardTests();
+int runDeletedTabTests();
 int runSearchPanelTests();
 int runTableInputTests();
 int runDockedPreviewTests();
@@ -174,6 +175,7 @@ int runPrintExportTests();
 int runScrollSyncTests(const char* file);
 
 int main(int argc, char** argv) {
+    if (argc == 2 && std::string(argv[1]) == "--deleted-tab-tests") return runDeletedTabTests();
     if (argc == 2 && std::string(argv[1]) == "--editor-feature-tests") return runEditorFeatureTests();
     if (argc == 2 && std::string(argv[1]) == "--ui-font-tests") return runUiFontTests();
     if (argc == 2 && std::string(argv[1]) == "--print-export-tests") return runPrintExportTests();

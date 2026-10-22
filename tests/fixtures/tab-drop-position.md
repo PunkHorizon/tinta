@@ -41,3 +41,12 @@ const char* expected = "A, Incoming, B, C";
 
 The [positions section](#positions-to-check), table and quote should remain
 readable. The equation $\frac{a}{b}$ must retain its baseline and spacing.
+
+### Deleted paths during transfer (#275)
+
+- Tear off a readable tab while both neighbors have been deleted: the source
+  window must keep a valid start page, with no stale document association.
+- A deleted document retained in RAM stays in its original window; save it
+  before tearing it off because the transfer protocol carries only a path.
+- Delete a file after starting its drag, then release: transfer must cancel
+  and the source tab must remain.

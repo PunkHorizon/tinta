@@ -24,12 +24,29 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <fstream>
+#include <sstream>
 #include <shellapi.h>
 
 namespace {
 
 constexpr int TIMER_FILE_WATCH_ID = 1;
 constexpr int TIMER_EDITOR_REPARSE_ID = 2;  // matches editor.cpp
+
+std::optional<std::string> readViewerSource(const std::string& path) {
+    if (path.empty()) return std::nullopt;
+    std::ifstream file(toWide(path));
+    if (!file) return std::nullopt;
+    std::stringstream buffer;
+    buffer << file.rdbuf();
+    if (file.bad()) return std::nullopt;
+    return buffer.str();
+}
+
+void cacheViewerSource(App& app, App::DocTab& tab) {
+    if (!app.keepDeletedTabs) { tab.viewerSource.reset(); return; }
+    if (auto source = readViewerSource(tab.path)) tab.viewerSource = std::move(source);
+}
 
 std::wstring titleForPath(App& app, const std::string& path) {
     if (path.empty()) return tr(app, "title.untitled");
@@ -47,6 +64,10 @@ void syncActiveTab(App& app) {
     }
     App::DocTab& tab = app.tabs[app.activeTab];
     tab.path = app.currentFile;
+    if (app.keepDeletedTabs && !app.currentFile.empty() && !app.editMode) {
+        tab.viewerSource = app.sourceText;
+    }
+    else if (!app.keepDeletedTabs || app.currentFile.empty()) tab.viewerSource.reset();
     // A pathless viewer tab with a custom title (an embedded Learn
     // document from the start page) keeps it; quick notes re-derive
     if (!app.currentFile.empty() || tab.title.empty() || app.editMode) {
@@ -94,12 +115,22 @@ void parkActiveEditBuffer(App& app) {
 
 }  // namespace
 
+void tabsSetKeepDeleted(App& app, bool enabled) {
+    app.keepDeletedTabs = enabled;
+    for (auto& tab : app.tabs) cacheViewerSource(app, tab);
+    if (enabled && !app.currentFile.empty() && app.activeTab >= 0 &&
+        app.activeTab < (int)app.tabs.size()) {
+        app.tabs[app.activeTab].viewerSource = app.sourceText;
+    }
+}
+
 void tabsInit(App& app) {
     if (!app.tabs.empty()) return;
     App::DocTab tab;
     tab.id = ++app.tabIdCounter;
     tab.path = app.currentFile;
     tab.title = titleForPath(app, app.currentFile);
+    if (app.keepDeletedTabs && !tab.path.empty()) tab.viewerSource = app.sourceText;
     // A pathless viewer tab is the start page, not an untitled note
     if (app.currentFile.empty() && !app.editMode) tab.title = L"Tinta";
     app.tabs.push_back(std::move(tab));
@@ -117,9 +148,11 @@ void tabsSeedSession(App& app, const std::vector<std::string>& paths) {
         tab.id = ++app.tabIdCounter;
         tab.path = path;
         tab.title = titleForPath(app, path);
+        cacheViewerSource(app, tab);
         if (app.activeTab < 0 &&
             _stricmp(path.c_str(), app.currentFile.c_str()) == 0) {
             app.activeTab = (int)app.tabs.size();
+            if (app.keepDeletedTabs) tab.viewerSource = app.sourceText;
         }
         app.tabs.push_back(std::move(tab));
     }
@@ -128,6 +161,7 @@ void tabsSeedSession(App& app, const std::vector<std::string>& paths) {
         tab.id = ++app.tabIdCounter;
         tab.path = app.currentFile;
         tab.title = titleForPath(app, app.currentFile);
+        if (app.keepDeletedTabs && !tab.path.empty()) tab.viewerSource = app.sourceText;
         app.tabs.push_back(std::move(tab));
         app.activeTab = (int)app.tabs.size() - 1;
     }
@@ -137,6 +171,14 @@ void tabActivate(App& app, HWND hwnd, int index) {
     tabsInit(app);
     if (index < 0 || index >= (int)app.tabs.size()) return;
     if (index == app.activeTab) return;
+
+    // Resolve the destination before leaving the current tab. A failed
+    // open must not attach the previous document to the destination tab.
+    App::DocTab& destination = app.tabs[index];
+    auto source = readViewerSource(destination.path);
+    if (!source && app.keepDeletedTabs) source = destination.viewerSource;
+    if (!source && destination.editMode) source = toUtf8(destination.editorText);
+    if (!destination.path.empty() && !source) return;
 
     // Leaving an embedded Learn document: an empty tab activated later
     // shows the launcher again
@@ -150,11 +192,15 @@ void tabActivate(App& app, HWND hwnd, int index) {
     if (!tab.path.empty()) {
         // openDocumentInViewer saves the old reading position and restores
         // the new one; parse + viewport-first layout makes this feel instant
-        openDocumentInViewer(app, toWide(tab.path));
+        openDocumentSourceInViewer(app, toWide(tab.path), *source);
+        if (app.keepDeletedTabs) tab.viewerSource = std::move(source);
+        tab.fileMissing = GetFileAttributesW(toWide(tab.path).c_str()) ==
+                          INVALID_FILE_ATTRIBUTES;
     } else {
         // Untitled note: swap in an empty document so the preview pane
         // does not keep showing the previous tab's content
         app.currentFile.clear();
+        app.sourceText.clear();
         auto result = parseDocument(app.parser, std::string(), app.currentFile);
         if (result.success) {
             app.root = result.root;
@@ -204,6 +250,8 @@ void tabOpenPath(App& app, HWND hwnd, const std::string& utf8Path,
     tab.id = ++app.tabIdCounter;
     tab.path = utf8Path;
     tab.title = titleForPath(app, utf8Path);
+    cacheViewerSource(app, tab);
+    if (!utf8Path.empty() && !tab.viewerSource && !std::ifstream(toWide(utf8Path))) return;
     int index = insertBefore < 0 ? (int)app.tabs.size()
                                : std::min(insertBefore, (int)app.tabs.size());
     app.tabs.insert(app.tabs.begin() + index, std::move(tab));
@@ -230,7 +278,8 @@ void tabCloseIndex(App& app, HWND hwnd, int index) {
                      : (app.tabs[index].editMode && app.tabs[index].editorDirty);
     if (dirty) {
         if (index != app.activeTab) tabActivate(app, hwnd, index);
-        app.pendingTabClose = app.activeTab;
+        if (app.activeTab != index) return;
+        app.pendingTabClose = index;
         app.confirmExitPending = true;
         app.confirmExitOpenedAt = std::chrono::steady_clock::now();
         InvalidateRect(hwnd, nullptr, FALSE);
@@ -258,9 +307,20 @@ void tabCloseIndex(App& app, HWND hwnd, int index) {
             app.tabs[index].editMode = false;
             app.tabs[index].editorText.clear();
         }
-        int next = index + 1 < (int)app.tabs.size() ? index + 1 : index - 1;
-        // Activate first (so state lands in the surviving tab), then drop
-        tabActivate(app, hwnd, next);
+        // A deleted neighbor can refuse activation when retention is off.
+        // Only erase the active tab after a surviving document took ownership.
+        const int count = (int)app.tabs.size();
+        for (int offset = 1; offset < count && app.activeTab == index; ++offset) {
+            if (index + offset < count) tabActivate(app, hwnd, index + offset);
+            if (app.activeTab == index && index - offset >= 0)
+                tabActivate(app, hwnd, index - offset);
+        }
+        if (app.activeTab == index) {
+            // Keep unavailable tabs intact; replace the closed document with
+            // a launcher so no stale document or out-of-range index survives.
+            tabBecomeStartPage(app, hwnd);
+            return;
+        }
         int erase = index;
         app.tabs.erase(app.tabs.begin() + erase);
         if (app.activeTab > erase) app.activeTab--;
@@ -275,9 +335,14 @@ void tabCloseIndex(App& app, HWND hwnd, int index) {
 void tabCycle(App& app, HWND hwnd, int direction) {
     tabsInit(app);
     if (app.tabs.size() < 2) return;
-    int count = (int)app.tabs.size();
-    int next = (app.activeTab + direction + count) % count;
-    tabActivate(app, hwnd, next);
+    const int count = (int)app.tabs.size();
+    const int start = app.activeTab;
+    const int step = direction < 0 ? -1 : 1;
+    for (int offset = 1; offset < count; ++offset) {
+        const int next = (start + step * offset + count) % count;
+        tabActivate(app, hwnd, next);
+        if (app.activeTab != start) return;
+    }
 }
 
 // The lone surviving tab turns into the start page in place: closing
@@ -293,6 +358,9 @@ void tabBecomeStartPage(App& app, HWND hwnd) {
     tab.editMode = false;
     tab.editorDirty = false;
     tab.editorText.clear();
+    tab.viewerSource.reset();
+    tab.fileMissing = false;
+    app.sourceText.clear();
     app.currentFile.clear();
     auto result = parseDocument(app.parser, std::string(), app.currentFile);
     if (result.success) {
@@ -446,6 +514,7 @@ bool tabReceiveCopyData(App& app, HWND hwnd, const COPYDATASTRUCT& data) {
     const char* path = bytes + prefix;
     const size_t length = data.cbData - prefix - 1;
     if (path[length] != '\0' || std::memchr(path, '\0', length)) return false;
+    if (!std::ifstream(toWide(std::string(path, length)))) return false;
     int index = -1;
     if (data.dwData == 2) {
         POINT point;
@@ -454,10 +523,14 @@ bool tabReceiveCopyData(App& app, HWND hwnd, const COPYDATASTRUCT& data) {
         index = tabDropInsertionIndex(app, point);
     }
     tabOpenPath(app, hwnd, std::string(path, length), true, index);
-    return true;
+    return app.activeTab >= 0 && app.activeTab < (int)app.tabs.size() &&
+           _stricmp(app.currentFile.c_str(), path) == 0;
 }
 
 bool tabSendDrop(HWND target, const std::string& utf8Path, POINT screenPoint) {
+    // This protocol transfers paths, not cached content. Keep recovery tabs
+    // in their source window until the user saves them to an existing file.
+    if (!std::ifstream(toWide(utf8Path))) return false;
     std::string payload(sizeof(screenPoint), '\0');
     std::memcpy(payload.data(), &screenPoint, sizeof(screenPoint));
     payload += utf8Path;
@@ -1439,6 +1512,7 @@ bool tabStripMouseDown(App& app, HWND hwnd, int x, int y, bool middle) {
             return true;
         }
         tabActivate(app, hwnd, hit.index);
+        if (app.activeTab != hit.index) return true;
         // Arm a potential drag: moving past the threshold starts
         // reordering, pulling away from the strip detaches the tab
         app.tabDragIndex = hit.index;
@@ -1569,8 +1643,15 @@ void tabBulkCloseStep(App& app, HWND hwnd) {
             InvalidateRect(hwnd, nullptr, FALSE);
             return;
         }
+        const size_t before = app.tabs.size();
         tabCloseIndex(app, hwnd, victim);
         if (app.confirmExitPending) return;  // waiting on the dialog
+        if (app.tabs.size() >= before) {
+            // A missing kept tab may leave a replacement launcher instead
+            // of removing the victim. Do not repeatedly close that launcher.
+            app.tabBulkCloseMode = 0;
+            return;
+        }
     }
 }
 
@@ -1870,13 +1951,9 @@ void dragCloseLocal(App& app, HWND hwnd, int index) {
         PostMessageW(hwnd, WM_CLOSE, 0, 0);
         return;
     }
-    if (index == app.activeTab) {
-        int next = index + 1 < (int)app.tabs.size() ? index + 1 : index - 1;
-        tabActivate(app, hwnd, next);
-    }
-    app.tabs.erase(app.tabs.begin() + index);
-    if (app.activeTab > index) app.activeTab--;
-    app.hoveredTab = -1;
+    // A transferred tab is clean; use the same guarded neighbor selection
+    // and launcher fallback as a normal close.
+    tabCloseIndex(app, hwnd, index);
 }
 
 }  // namespace
@@ -1902,7 +1979,7 @@ void tabDragMove(App& app, HWND hwnd, int x, int y) {
                         : (app.tabs[index].editMode &&
                            app.tabs[index].editorDirty);
     const std::string& path = active ? app.currentFile : app.tabs[index].path;
-    bool detachable = !dirty && !path.empty();
+    bool detachable = !dirty && !path.empty() && std::ifstream(toWide(path)).good();
 
     // Clear of the strip: the tab floats as a ghost card until release
     float stripH = chromeTopHeight(app);
@@ -1964,6 +2041,11 @@ void tabDragEnd(App& app, HWND hwnd, int x, int y) {
             active ? app.currentFile : app.tabs[index].path;
         POINT screen = {x, y};
         ClientToScreen(hwnd, &screen);
+        // The file may have disappeared after the drag was armed.
+        if (!std::ifstream(toWide(path))) {
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return;
+        }
 
         // Dropped onto another Tinta window: the tab moves there
         HWND under = WindowFromPoint(screen);

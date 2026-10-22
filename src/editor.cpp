@@ -1577,7 +1577,15 @@ void enterEditMode(App& app) {
     // Load raw file content
     std::wstring widePath = toWide(app.currentFile);
     std::ifstream file(widePath, std::ios::binary);
-    if (!file) return;
+    if (!file) {
+        // The viewer still owns the last readable source of a deleted
+        // file. Let the user recover it with Save or Save As.
+        if (!app.keepDeletedTabs || GetFileAttributesW(widePath.c_str()) != INVALID_FILE_ATTRIBUTES) return;
+        enterEditModeWithContent(app, app.sourceText);
+        app.editorDirty = true;
+        updateWindowTitle(app);
+        return;
+    }
 
     std::stringstream buf;
     buf << file.rdbuf();
@@ -1606,6 +1614,7 @@ void enterRecoveredDraft(App& app, HWND hwnd, const std::string& content,
                                       : (app.tabs[i].editMode && app.tabs[i].editorDirty);
             if (dirty || _stricmp(path.c_str(), origPath.c_str()) != 0) continue;
             tabActivate(app, hwnd, (int)i);
+            if (app.activeTab != (int)i) continue;
             enterEditModeWithContent(app, content);
             app.editorDirty = true;
             updateWindowTitle(app);
@@ -1680,6 +1689,15 @@ void exitEditMode(App& app) {
         std::stringstream buf;
         buf << file.rdbuf();
         auto result = parseDocument(app.parser, buf.str(), app.currentFile);
+        if (result.success) {
+            app.sourceText = buf.str();
+            app.root = result.root;
+            app.parseTimeUs = result.parseTimeUs;
+        }
+    } else {
+        // Discard edits back to the last viewed source, even if the file
+        // disappeared. This source lives only in the current process.
+        auto result = parseDocument(app.parser, app.sourceText, app.currentFile);
         if (result.success) {
             app.root = result.root;
             app.parseTimeUs = result.parseTimeUs;
@@ -1806,11 +1824,17 @@ void renderEditorReadingButton(App& app) {
 
 // --- File save ---
 
-// Classic Save As dialog for untitled quick notes (Ctrl+N). Returns false
+// Save As for quick notes, explicit copies and deleted originals. Returns false
 // when the user cancels; on success app.currentFile carries the new path
 // and the note becomes a normal file-backed session.
 static bool promptSaveAsPath(App& app, HWND hwnd) {
     wchar_t path[MAX_PATH] = L"";
+    const std::filesystem::path previous(toWide(app.currentFile));
+    const std::wstring name = previous.filename().wstring();
+    if (!name.empty()) wcsncpy_s(path, name.c_str(), _TRUNCATE);
+    const std::wstring directory = previous.parent_path().wstring();
+    const DWORD attributes = directory.empty() ? INVALID_FILE_ATTRIBUTES
+        : GetFileAttributesW(directory.c_str());
     OPENFILENAMEW ofn = {};
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner = hwnd;
@@ -1819,6 +1843,8 @@ static bool promptSaveAsPath(App& app, HWND hwnd) {
                       L"PlantUML (*.puml;*.plantuml)\0*.puml;*.plantuml\0"
                       L"All files (*.*)\0*.*\0";
     ofn.lpstrFile = path;
+    if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY))
+        ofn.lpstrInitialDir = directory.c_str();
     ofn.nMaxFile = MAX_PATH;
     ofn.lpstrDefExt = L"md";
     ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
@@ -1990,15 +2016,13 @@ void renderQuickNoteEmptyState(App& app) {
     }
 }
 
-void saveEditorFile(App& app, HWND hwnd) {
+// The destination was checked or explicitly confirmed by the user.
+// Save As may choose a new file, so this writer must not prompt again.
+static void writeEditorFile(App& app, HWND hwnd) {
     // The open table cell belongs in the save (#148)
     tableEditCommit(app);
     auto seenKey = frontmatterSeenKey(app);
     std::string firstSeen = app.frontmatterFirstSeen.count(seenKey) ? app.frontmatterFirstSeen[seenKey] : fm::utcNow();
-    if (app.currentFile.empty()) {
-        // Untitled quick note: name it now; cancel keeps editing untitled
-        if (!promptSaveAsPath(app, hwnd)) return;
-    }
 
     std::string utf8 = toUtf8(app.editorText);
     if (!isPlainTextDocumentPath(app.currentFile) &&
@@ -2071,6 +2095,9 @@ void saveEditorFile(App& app, HWND hwnd) {
         // Reparse and update preview immediately
         editorReparse(app);
 
+        app.sourceText = utf8;
+        if (app.keepDeletedTabs) app.tabs[app.activeTab].viewerSource = app.sourceText;
+
         // Show "Saved!" notification
         signalPush(app, SIG_SUCCESS, SIGI_CHECK,
                    std::wstring(tr(app, "toast.saved")) + L" \u2014 ",
@@ -2094,6 +2121,24 @@ void saveEditorFile(App& app, HWND hwnd) {
     }
 }
 
+void saveEditorFile(App& app, HWND hwnd) {
+    tableEditCommit(app);
+    if (app.currentFile.empty()) {
+        saveEditorFileAs(app, hwnd);
+        return;
+    }
+    // Check the disk directly: deletion may precede the file-watch tick.
+    if (GetFileAttributesW(toWide(app.currentFile).c_str()) == INVALID_FILE_ATTRIBUTES) {
+        const DWORD error = GetLastError();
+        if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) {
+            app.editorDirty = true; // cancelling must also keep a clean recovery buffer open
+            saveEditorFileAs(app, hwnd);
+            return;
+        }
+    }
+    writeEditorFile(app, hwnd);
+}
+
 // Save As (#121): pick a new path, write there, and the tab follows
 void saveEditorFileAs(App& app, HWND hwnd) {
     auto key = frontmatterSeenKey(app);
@@ -2101,7 +2146,7 @@ void saveEditorFileAs(App& app, HWND hwnd) {
     if (!promptSaveAsPath(app, hwnd)) return;  // cancel keeps the old path
     if (!firstSeen.empty()) app.frontmatterFirstSeen[frontmatterSeenKey(app)] = firstSeen;
     app.editorDirty = true;  // force the write even for a clean buffer
-    saveEditorFile(app, hwnd);
+    writeEditorFile(app, hwnd);
     if (app.editorDirty) return;  // write failed (toast already shown)
 
     // The active tab takes on the new identity
@@ -2130,6 +2175,12 @@ void saveFileAs(App& app, HWND hwnd) {
     std::wstring src = toWide(previous);
     std::wstring dst = toWide(app.currentFile);
     bool ok = CopyFileW(src.c_str(), dst.c_str(), FALSE) != 0;
+    if (!ok && app.keepDeletedTabs && GetFileAttributesW(src.c_str()) == INVALID_FILE_ATTRIBUTES) {
+        std::ofstream file(dst, std::ios::binary);
+        file.write(app.sourceText.data(), (std::streamsize)app.sourceText.size());
+        file.close();
+        ok = !file.fail();
+    }
     if (!ok) {
         app.currentFile = previous;
         signalPushKey(app, SIG_ERROR, SIGI_WARNING, "toast.save_failed");
@@ -2137,6 +2188,7 @@ void saveFileAs(App& app, HWND hwnd) {
         tabsInit(app);
         App::DocTab& tab = app.tabs[app.activeTab];
         tab.path = app.currentFile;
+        if (app.keepDeletedTabs) tab.viewerSource = app.sourceText;
         size_t slash = app.currentFile.find_last_of("/\\");
         tab.title = toWide(slash == std::string::npos
                                ? app.currentFile

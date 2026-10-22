@@ -217,6 +217,7 @@ struct Settings {
     // Plain file launches join the existing window as a new tab (Win11
     // Notepad model); off restores one window per document
     bool openInTabs = true;
+    bool keepDeletedTabs = false; // retain viewer source in RAM until close
     // Last session's open tabs, restored on the next plain launch
     std::vector<std::string> sessionTabs;
     int sessionActive = 0;
@@ -500,8 +501,8 @@ struct App {
     int themeChooserPreviewBase = -1;
 
     // --- Tabbed interface (Win11 Notepad-style tabs in the title bar) ---
-    // A tab keeps only what the document itself cannot restore: its path
-    // and, when the user switches away mid-edit, the parked editor buffer.
+    // Keep the last readable source too: temporary files can disappear
+    // while their tabs are still open. nullopt differs from an empty file.
     // View-mode scroll positions ride the existing reading-position memory.
     struct DocTab {
         int id = 0;                // stable identity across reorders/closes
@@ -510,6 +511,7 @@ struct App {
         bool editMode = false;     // switched away while editing
         bool editorDirty = false;
         bool fileMissing = false;  // deleted/renamed on disk (red-grey dot)
+        std::optional<std::string> viewerSource;
         FILETIME lastWrite{};      // for external-change conflicts (dirty tabs)
         std::wstring editorText;   // parked edit buffer (editMode only)
         float editorScrollY = 0.0f;
@@ -1012,6 +1014,7 @@ struct App {
     bool browserFocusPath = false;
     // Plain file launches join this window as tabs (settings toggle)
     bool openInTabs = true;
+    bool keepDeletedTabs = false;
     int folderSearchGeneration = 0;
     struct FolderMatch {
         std::wstring snippet;

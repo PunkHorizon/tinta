@@ -2892,6 +2892,12 @@ void renderSettingsOverlay(App& app) {
                        cy + (rowCardH - dpi(app, 20.0f)) * 0.5f,
                        app.openInTabs, SET_TOGGLE_OPENTABS, anim);
         cy += rowCardH + cardGap;
+        card(rowCardH);
+        cardLabel(tr(app, "settings.keep_deleted_tabs"), tr(app, "settings.keep_deleted_tabs.hint"), dpi(app, 60.0f));
+        settingsToggle(app, cx + cw - cardPad - dpi(app, 40.0f),
+                       cy + (rowCardH - dpi(app, 20.0f)) * 0.5f,
+                       app.keepDeletedTabs, SET_TOGGLE_KEEPDELETED, anim);
+        cy += rowCardH + cardGap;
         // One card for the three hand-editable ini files (was three rows)
         card(rowCardH);
         cardLabel(tr(app, "settings.config_files"), nullptr);
