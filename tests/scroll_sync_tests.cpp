@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
 #include <fstream>
 #include <functional>
 #include <iostream>
@@ -175,9 +176,13 @@ void editOpensWhereReading(App& app, const char* path, int width, int height) {
 }
 
 int runScrollSyncTests(const char* path) {
+    namespace fs = std::filesystem;
     std::ifstream file(path, std::ios::binary);
-    const std::string source((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-    check(!source.empty(), "the scroll sync document opens");
+    std::string original((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    check(!original.empty(), "the scroll sync document opens");
+    std::string lf;
+    for (size_t i = 0; i < original.size(); ++i)
+        if (!(original[i] == '\r' && i + 1 < original.size() && original[i + 1] == '\n')) lf += original[i];
     auto state = std::make_unique<App>();
     App& app = *state;
     app.hwnd = CreateWindowExW(0, L"STATIC", L"Scroll sync tests", WS_POPUP, 0, 0, 1979, 1251,
@@ -186,13 +191,34 @@ int runScrollSyncTests(const char* path) {
     app.width = 1979; app.height = 1251;
     updateTextFormats(app);
     Settings settings; settings.keyProfile = "windows"; applyKeymap(app, settings);
-    offsetsInsideSource(app, source);
-    // The reporter's window, then a smaller one; word wrap off and on
-    for (auto size : {std::pair<int, int>{1979, 1251}, std::pair<int, int>{1050, 900}})
-        for (bool wrap : {false, true})
-            followsEditor(app, source, path, size.first, size.second, wrap);
-    for (auto size : {std::pair<int, int>{1979, 1251}, std::pair<int, int>{1050, 900}})
-        editOpensWhereReading(app, path, size.first, size.second);
+    // The document with LF and with CRLF line endings, whichever the
+    // checkout produced: the viewer reads files in text mode, the editor
+    // raw, and a CRLF file opened the editor too far up (#267). Each copy
+    // keeps its folder (images in ../assets).
+    fs::path root = fs::path(path).parent_path();
+    if (root.filename() == "docs") root = root.parent_path();
+    const fs::path relative = fs::relative(fs::path(path), root);
+    for (bool crlf : {false, true}) {
+        const fs::path copy = fs::current_path() / (crlf ? "variant-crlf" : "variant-lf");
+        std::error_code ec;
+        fs::remove_all(copy, ec);
+        fs::copy(root, copy, fs::copy_options::recursive, ec);
+        check(!ec, "the document's folder copies");
+        std::string source;
+        for (char c : lf) { if (crlf && c == '\n') source += '\r'; source += c; }
+        { std::ofstream out(copy / relative, std::ios::binary); out << source; }
+        const std::string variant = (copy / relative).string();
+        const std::string label = crlf ? " CRLF" : " LF";
+        const int before = failures;
+        offsetsInsideSource(app, source);
+        // The reporter's window, then a smaller one; word wrap off and on
+        for (auto size : {std::pair<int, int>{1979, 1251}, std::pair<int, int>{1050, 900}})
+            for (bool wrap : {false, true})
+                followsEditor(app, source, variant.c_str(), size.first, size.second, wrap);
+        for (auto size : {std::pair<int, int>{1979, 1251}, std::pair<int, int>{1050, 900}})
+            editOpensWhereReading(app, variant.c_str(), size.first, size.second);
+        if (failures != before) std::cerr << "  (in the" << label << " copy)\n";
+    }
     DestroyWindow(app.hwnd); app.hwnd = nullptr; state.reset(); CoUninitialize();
     std::cout << "Scroll sync: " << failures << " failures\n";
     return failures ? 1 : 0;

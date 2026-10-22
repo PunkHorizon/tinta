@@ -1434,9 +1434,11 @@ static void enterEditModeWithContent(App& app, const std::string& content,
         }
     }
     // Map the current reading position to a source line so the editor opens
-    // where the user was, not at the top (#77). Anchors carry UTF-8 source
-    // offsets; count newlines in the raw content to get the line number
-    // (unaffected by the \r\n normalization below).
+    // where the user was, not at the top (#77). Anchors carry UTF-8 offsets
+    // into the text the reading view parsed, which the viewer reads in text
+    // mode: a CRLF there is one byte. The raw content is walked the same way
+    // (as toggleTaskOnDisk does), or a CRLF file opened the editor further
+    // above the reading position the further down it was (#267).
     size_t targetLine = 0;
     if (app.scrollY > 1.0f && !app.scrollAnchors.empty()) {
         size_t lo = 0, hi = app.scrollAnchors.size();
@@ -1445,9 +1447,12 @@ static void enterEditModeWithContent(App& app, const std::string& content,
             if (app.scrollAnchors[mid].renderedY <= app.scrollY) lo = mid;
             else hi = mid;
         }
-        size_t srcOffset = std::min(app.scrollAnchors[lo].sourceOffset, content.size());
-        for (size_t i = 0; i < srcOffset; i++) {
+        const size_t target = app.scrollAnchors[lo].sourceOffset;
+        size_t textPos = 0;  // position in the CR-stripped text
+        for (size_t i = 0; i < content.size() && textPos < target; i++) {
+            if (content[i] == '\r' && i + 1 < content.size() && content[i + 1] == '\n') continue;
             if (content[i] == '\n') targetLine++;
+            textPos++;
         }
     }
 

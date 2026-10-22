@@ -56,6 +56,22 @@ The same suite run on the reporter's document passes. With the old offset
 code both fail: headings after the YAML block are off by up to 10,019 px in
 the fixture and 21,430 px in the reporter's document.
 
+## CRLF files (follow-up, 2026-10-22)
+
+The contributor of PR #275 found the E check failing on a Windows checkout,
+where git turns the fixture's LF into CRLF. That is a product bug: the
+viewer reads documents in text mode, so its anchors count a CRLF as one
+byte, while `enterEditMode` read the file raw and counted newlines up to the
+anchor's offset. Every line above the reading position moved the target up
+by one byte, so the editor opened too far up: 22 lines at the end of the
+fixture. `toggleTaskOnDisk` already maps these offsets by skipping CRs; the
+E mapping now walks the raw content the same way.
+
+The suite now runs every check on an LF copy and a CRLF copy of the document
+(each with its `../assets`), whatever the checkout produced. With the old
+mapping only the CRLF copy fails, at 22 lines; with the change both pass,
+and the reporter's document passes too.
+
 ## Limits
 
 - The reporter's document is not committed; the fixture reproduces the
