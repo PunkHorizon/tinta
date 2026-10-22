@@ -707,8 +707,14 @@ void renderTabStrip(App& app) {
         float radius = dpi(app, 8.0f);
         float gap = dpi(app, 2.0f);
 
+        // The active tab's halo reaches past its sides. Clipped at the row's
+        // ends it was cut away on the outer side of the first and last tab,
+        // with the body's anti-aliased edge (#271); the clip leaves room for
+        // it. Labels stay inside their tabs (trimmed), and the reach stops
+        // short of the app icon and the + glyph.
+        const float haloReach = dpi(app, 3.0f * 2.2f) + 1.0f;
         app.renderTarget->PushAxisAlignedClip(
-            D2D1::RectF(m.tabsLeft, 0, m.tabsRight, stripH),
+            D2D1::RectF(m.tabsLeft - haloReach, 0, m.tabsRight + haloReach, stripH),
             D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
 
         for (int i = m.firstVisible; i < m.firstVisible + m.visibleCount; i++) {

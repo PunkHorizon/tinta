@@ -7,10 +7,16 @@
 #include "settings.h"
 #include "utils.h"
 
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+#include <d2d1_1.h>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <vector>
+#include <wrl/client.h>
 
 // Tab hover card (#246): a pointer resting on a tab shows the tab's whole
 // name and folder below the strip, after a dwell, and a click, key, wheel
@@ -51,6 +57,89 @@ bool hoverUntilCard(App& app, int tab) {
     paint(app);
     return cardShown(app);
 }
+}
+
+// The tab strip as drawn: for one frame the window target's device context
+// draws into a bitmap, which is copied to the CPU
+bool drawStrip(App& app, std::vector<uint32_t>& pixels, UINT& width, UINT& height) {
+    Microsoft::WRL::ComPtr<ID2D1DeviceContext> dc;
+    if (FAILED(app.renderTarget->QueryInterface(IID_PPV_ARGS(&dc)))) return false;
+    width = (UINT)app.width;
+    height = (UINT)std::ceil(chromeTopHeight(app));
+    const auto format = D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED);
+    Microsoft::WRL::ComPtr<ID2D1Bitmap1> target, readable;
+    if (FAILED(dc->CreateBitmap(D2D1::SizeU(width, height), nullptr, 0,
+            D2D1::BitmapProperties1(D2D1_BITMAP_OPTIONS_TARGET, format), &target)) ||
+        FAILED(dc->CreateBitmap(D2D1::SizeU(width, height), nullptr, 0,
+            D2D1::BitmapProperties1(D2D1_BITMAP_OPTIONS_CPU_READ | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
+                                    format), &readable))) {
+        return false;
+    }
+    Microsoft::WRL::ComPtr<ID2D1Image> previous;
+    dc->GetTarget(&previous);
+    dc->SetTarget(target.Get());
+    dc->BeginDraw();
+    dc->Clear(app.theme.background);
+    renderTabStrip(app);
+    const bool drawn = SUCCEEDED(dc->EndDraw());
+    dc->SetTarget(previous.Get());
+    D2D1_MAPPED_RECT mapped{};
+    if (!drawn || FAILED(readable->CopyFromBitmap(nullptr, target.Get(), nullptr)) ||
+        FAILED(readable->Map(D2D1_MAP_OPTIONS_READ, &mapped))) {
+        return false;
+    }
+    pixels.resize((size_t)width * height);
+    for (UINT y = 0; y < height; y++)
+        memcpy(&pixels[(size_t)y * width], mapped.bits + (size_t)y * mapped.pitch, width * 4);
+    readable->Unmap();
+    return true;
+}
+
+// #271: the active tab's halo shows on both sides of the first and the last
+// tab, as on a tab in the middle. The strip's clip ended exactly at the row's
+// ends and cut it away on their outer side.
+void endTabsKeepTheirHalo(App& app) {
+    const int savedActive = app.activeTab, savedHovered = app.hoveredTab;
+    app.hoveredTab = -1;
+    // The strip with a middle tab active: no halo near either end
+    std::vector<uint32_t> plain;
+    UINT plainWidth = 0, plainHeight = 0;
+    app.activeTab = 1;
+    check(drawStrip(app, plain, plainWidth, plainHeight), "the tab strip draws into a bitmap");
+    for (int end : {0, (int)app.tabs.size() - 1}) {
+        app.activeTab = end;
+        std::vector<uint32_t> pixels;
+        UINT width = 0, height = 0;
+        check(drawStrip(app, pixels, width, height), "the tab strip draws into a bitmap");
+        const App::TabHit* hit = hitFor(app, end);
+        check(hit != nullptr, "the end tab is in view");
+        if (!hit || pixels.empty() || plain.size() != pixels.size()) continue;
+        // Green channel (the shadow is grey), averaged over the pixels whose
+        // centres lie 2-5 DIPs outside the tab's left or right edge
+        const int row = std::clamp((int)(hit->rect.bottom - dpi(app, 4.0f)), 0, (int)height - 1);
+        auto side = [&](const std::vector<uint32_t>& image, bool left) {
+            const float edge = left ? hit->rect.left : hit->rect.right;
+            int sum = 0, count = 0;
+            for (int x = (int)edge - (int)dpi(app, 7.0f); x <= (int)edge + (int)dpi(app, 7.0f); x++) {
+                const float distance = left ? edge - (x + 0.5f) : (x + 0.5f) - edge;
+                if (x < 0 || x >= (int)width || distance < dpi(app, 2.0f) || distance > dpi(app, 5.0f))
+                    continue;
+                sum += (int)((image[(size_t)row * width + x] >> 8) & 0xFF);
+                count++;
+            }
+            return count ? (float)sum / count : -1.0f;
+        };
+        const float outer = side(pixels, end == 0), inner = side(pixels, end != 0);
+        const float base = side(plain, end == 0);
+        if (std::abs(outer - inner) > 2.0f || outer > base - 1.0f)
+            std::cerr << "  tab " << end << ": outer side " << outer << ", inner side " << inner
+                      << ", without the halo " << base << '\n';
+        check(outer <= base - 1.0f, "the active end tab's halo shows on its outer side");
+        check(std::abs(outer - inner) <= 2.0f,
+              "the halo is as dark on the outer side as on the inner side");
+    }
+    app.activeTab = savedActive;
+    app.hoveredTab = savedHovered;
 }
 
 // Left edge of a line laid out in a format, as the TOC and this card lay out
@@ -163,6 +252,7 @@ int runTabHoverCardTests() {
             app.width = (int)(1050 * scale);
             app.height = (int)(900 * scale);
             helpLeavesSharedFormats(app);
+            endTabsKeepTheirHalo(app);
             for (int width : {650, 1050}) {
                 app.width = (int)(width * scale);
                 app.height = (int)(900 * scale);
