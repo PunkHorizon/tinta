@@ -884,6 +884,8 @@ void handleMouseWheel(App& app, HWND hwnd, WPARAM wParam, LPARAM) {
         printPreviewSetPage(app, app.printPreviewPage + (delta < 0 ? 1 : -1));
         return;
     }
+    // A turn that only closes a menu does nothing else over the tab strip
+    const bool menuWasOpen = app.showContextMenu || app.showTabMenu;
     if (app.showContextMenu) {
         app.showContextMenu = false;
         app.contextMenuAnimation = 0;
@@ -892,6 +894,29 @@ void handleMouseWheel(App& app, HWND hwnd, WPARAM wParam, LPARAM) {
     if (app.showTabMenu) closeTabMenu(app);
     bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
     float delta = (float)GET_WHEEL_DELTA_WPARAM(wParam) / WHEEL_DELTA;
+
+    // Over the tab strip the wheel steps through the tabs, wrapping at both
+    // ends, as a turn down moves right (#272). Ctrl+wheel still zooms. A
+    // touchpad's small deltas add up to a notch per tab, and a pause or a
+    // change of direction starts the count afresh.
+    if (!ctrl && !app.showTabSwitcher && !app.showHelp && app.tabs.size() > 1 &&
+        tabStripVisible(app) && app.mouseY >= 0 && (float)app.mouseY < chromeTopHeight(app) &&
+        (float)app.mouseX >= appMenuButtonRect(app).right &&
+        (float)app.mouseX < captionIslandLeft(app)) {
+        if (!menuWasOpen) {
+            const auto now = std::chrono::steady_clock::now();
+            if (now - app.tabWheelLast > std::chrono::milliseconds(400) ||
+                (app.tabWheelAccum > 0.0f) != (delta > 0.0f)) {
+                app.tabWheelAccum = 0.0f;
+            }
+            app.tabWheelLast = now;
+            app.tabWheelAccum += delta;
+            while (app.tabWheelAccum >= 1.0f) { tabCycle(app, hwnd, -1); app.tabWheelAccum -= 1.0f; }
+            while (app.tabWheelAccum <= -1.0f) { tabCycle(app, hwnd, 1); app.tabWheelAccum += 1.0f; }
+        }
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return;
+    }
 
     // Help overlay scroll
     if (app.showHelp) {

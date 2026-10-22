@@ -142,6 +142,70 @@ void endTabsKeepTheirHalo(App& app) {
     app.hoveredTab = savedHovered;
 }
 
+// #272: the wheel over the tab strip steps through the tabs and wraps
+void wheel(App& app, short delta, bool ctrl = false) {
+    BYTE original[256], pressed[256];
+    GetKeyboardState(original);
+    memcpy(pressed, original, sizeof pressed);
+    pressed[VK_CONTROL] = ctrl ? 0x80 : 0;
+    SetKeyboardState(pressed);
+    handleMouseWheel(app, app.hwnd, MAKEWPARAM(0, delta), 0);
+    SetKeyboardState(original);
+}
+
+void wheelSwitchesTabs(App& app) {
+    const int count = (int)app.tabs.size();
+    tabActivate(app, app.hwnd, 0);
+    paint(app);
+    const App::TabHit* hit = hitFor(app, 1);
+    check(hit != nullptr, "a tab to rest the pointer on");
+    if (!hit) return;
+    // Over a tab, then over the strip's empty stretch beside the + button
+    for (float x : {(hit->rect.left + hit->rect.right) * 0.5f, captionIslandLeft(app) - dpi(app, 12.0f)}) {
+        app.mouseX = (int)x;
+        app.mouseY = (int)(chromeTopHeight(app) * 0.5f);
+        app.tabWheelLast = {};
+        tabActivate(app, app.hwnd, 0);
+        bool order = true;
+        for (int step = 1; step <= count; step++) {  // down: right, last wraps to first
+            wheel(app, -WHEEL_DELTA);
+            order = order && app.activeTab == step % count;
+        }
+        check(order, "each notch down activates the next tab, and the last wraps to the first");
+        wheel(app, WHEEL_DELTA);
+        check(app.activeTab == count - 1, "a notch up from the first tab wraps to the last");
+        wheel(app, WHEEL_DELTA);
+        check(app.activeTab == count - 2, "a notch up activates the previous tab");
+    }
+    // A touchpad's quarter notches add up to one tab
+    tabActivate(app, app.hwnd, 0);
+    app.tabWheelLast = {};
+    for (int i = 0; i < 3; i++) wheel(app, -WHEEL_DELTA / 4);
+    check(app.activeTab == 0, "three quarter notches switch nothing yet");
+    wheel(app, -WHEEL_DELTA / 4);
+    check(app.activeTab == 1, "the fourth quarter notch moves one tab");
+    // A pause starts the count afresh, so stray fractions never add up
+    wheel(app, -WHEEL_DELTA / 2);
+    Sleep(450);
+    wheel(app, -WHEEL_DELTA / 2);
+    check(app.activeTab == 1, "half notches on either side of a pause switch nothing");
+    // Ctrl+wheel keeps zooming
+    const float zoom = app.zoomFactor;
+    wheel(app, WHEEL_DELTA, true);
+    check(app.activeTab == 1 && app.zoomFactor != zoom, "Ctrl+wheel over the strip zooms instead");
+    app.zoomFactor = zoom;
+    updateTextFormats(app);
+    // Below the strip the wheel scrolls the document as before
+    app.mouseY = (int)(chromeTopHeight(app) + dpi(app, 200.0f));
+    wheel(app, -WHEEL_DELTA);
+    check(app.activeTab == 1, "the wheel over the document leaves the tabs alone");
+    // A turn that closes the tab menu does only that
+    app.mouseY = (int)(chromeTopHeight(app) * 0.5f);
+    openTabMenu(app, 1, app.mouseX, app.mouseY);
+    wheel(app, -WHEEL_DELTA);
+    check(!app.showTabMenu && app.activeTab == 1, "a turn that closes the tab menu switches no tab");
+}
+
 // Left edge of a line laid out in a format, as the TOC and this card lay out
 // their rows
 float textLeft(App& app, IDWriteTextFormat* format, const wchar_t* text) {
@@ -375,6 +439,10 @@ int runTabHoverCardTests() {
     app.mouseY = (int)chromeTopHeight(app) + 40;
     paint(app);
     check(!cardShown(app), "no card once the pointer is off the tab");
+
+    wheelSwitchesTabs(app);
+    tabActivate(app, app.hwnd, 0);
+    paint(app);
 
     // Tabs without a file: a card only when it says something
     App::DocTab untitled;

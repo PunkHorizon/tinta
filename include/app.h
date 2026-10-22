@@ -529,6 +529,10 @@ struct App {
     std::vector<DocTab> tabs;
     int activeTab = 0;
     bool showTabSwitcher = false;      // chevron dropdown (open-files list)
+    // The wheel over the tab strip steps through tabs (#272): notches of a
+    // high-resolution wheel or touchpad add up here, and a pause resets
+    float tabWheelAccum = 0.0f;
+    std::chrono::steady_clock::time_point tabWheelLast{};
     int tabSwitcherHover = -1;
     int hoveredTab = -1;               // strip hover for close-button reveal
     // Tab hover card (#246): a resting pointer shows the tab's full name
