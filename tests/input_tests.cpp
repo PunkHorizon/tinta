@@ -173,6 +173,7 @@ int runEditorFeatureTests();
 int runUiFontTests();
 int runPrintExportTests();
 int runScrollSyncTests(const char* file);
+int runNotificationSettingTests();
 
 int main(int argc, char** argv) {
     if (argc == 2 && std::string(argv[1]) == "--deleted-tab-tests") return runDeletedTabTests();
@@ -180,6 +181,7 @@ int main(int argc, char** argv) {
     if (argc == 2 && std::string(argv[1]) == "--ui-font-tests") return runUiFontTests();
     if (argc == 2 && std::string(argv[1]) == "--print-export-tests") return runPrintExportTests();
     if (argc == 3 && std::string(argv[1]) == "--scroll-sync-tests") return runScrollSyncTests(argv[2]);
+    if (argc == 2 && std::string(argv[1]) == "--notification-setting-tests") return runNotificationSettingTests();
     if (argc == 2 && std::string(argv[1]) == "--window-drag-tests") return runWindowDragTests();
     if (argc == 2 && std::string(argv[1]) == "--table-layout-tests") return runTableLayoutTests();
     if (argc == 2 && std::string(argv[1]) == "--table-input-tests") return runTableInputTests();

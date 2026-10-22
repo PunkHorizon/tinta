@@ -717,6 +717,15 @@ static void settingsAction(App& app, HWND hwnd, int action) {
             // from clobbering it (they no longer write this flag)
             persistOpenInTabs(app);
             break;
+        case SET_TOGGLE_NOTIFICATIONS: {
+            // Persisted now and left as on disk at exit, like openInTabs:
+            // other windows read it when they start (#273)
+            signalSetNotifications(app, !app.showNotifications);
+            Settings settings = loadSettings();
+            settings.showNotifications = app.showNotifications;
+            saveSettings(settings);
+            break;
+        }
         case SET_TOGGLE_KEEPDELETED: {
             tabsSetKeepDeleted(app, !app.keepDeletedTabs);
             Settings settings = loadSettings();

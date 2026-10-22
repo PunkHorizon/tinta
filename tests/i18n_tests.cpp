@@ -55,7 +55,7 @@ int main() {
         check(std::wstring(tr(ru, entry.key)) == entry.text, "Russian translation lookup resolves the built-in text");
         check(formats(tr(en, entry.key)) == formats(entry.text), "Russian preserves printf arguments and order");
     }
-    check(russianKeys.size() == 357, "Russian covers every current interface key");
+    check(russianKeys.size() == 359, "Russian covers every current interface key");
     check(en == 0, "en is the first registry entry");
     check(zh == 1, "zh is the second registry entry");
     check(de >= 0, "de is registered");

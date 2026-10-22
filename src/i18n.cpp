@@ -56,6 +56,8 @@ const Entry kEntries[] = {
     { "theme.editor.default_name", L"My theme", nullptr, nullptr, nullptr },
     { "settings.keep_deleted_tabs", L"Keep deleted files in memory", nullptr, nullptr, nullptr },
     { "settings.keep_deleted_tabs.hint", L"Increases RAM usage; until Tinta closes", nullptr, nullptr, nullptr },
+    { "settings.notifications", L"Show notifications", L"\u663E\u793A\u901A\u77E5", L"\u901A\u77E5\u3092\u8868\u793A", L"\uC54C\uB9BC \uD45C\uC2DC" },
+    { "settings.notifications.hint", L"Copy, save and status messages; warnings still show", L"\u590D\u5236\u3001\u4FDD\u5B58\u7B49\u63D0\u793A\uFF1B\u8B66\u544A\u4ECD\u4F1A\u663E\u793A", L"\u30B3\u30D4\u30FC\u3084\u4FDD\u5B58\u306A\u3069\u306E\u30E1\u30C3\u30BB\u30FC\u30B8\u3002\u8B66\u544A\u306F\u5E38\u306B\u8868\u793A", L"\uBCF5\uC0AC, \uC800\uC7A5 \uB4F1\uC758 \uBA54\uC2DC\uC9C0. \uACBD\uACE0\uB294 \uD56D\uC0C1 \uD45C\uC2DC" },
     { "toast.file_missing", L"File not found:", L"\u627e\u4e0d\u5230\u6587\u4ef6\uff1a", L"\u30d5\u30a1\u30a4\u30eb\u304c\u898b\u3064\u304b\u308a\u307e\u305b\u3093\uff1a", L"\ud30c\uc77c\uc744 \ucc3e\uc744 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4:" },
     { "toast.file_no_app", L"No default app is set for this file:", L"\u672a\u8bbe\u7f6e\u6253\u5f00\u6b64\u6587\u4ef6\u7684\u9ed8\u8ba4\u5e94\u7528\uff1a", L"\u3053\u306e\u30d5\u30a1\u30a4\u30eb\u306e\u65e2\u5b9a\u306e\u30a2\u30d7\u30ea\u304c\u8a2d\u5b9a\u3055\u308c\u3066\u3044\u307e\u305b\u3093\uff1a", L"\uc774 \ud30c\uc77c\uc758 \uae30\ubcf8 \uc571\uc774 \uc124\uc815\ub418\uc5b4 \uc788\uc9c0 \uc54a\uc2b5\ub2c8\ub2e4:" },
     { "toast.file_open_failed", L"Could not open file:", L"\u65e0\u6cd5\u6253\u5f00\u6587\u4ef6\uff1a", L"\u30d5\u30a1\u30a4\u30eb\u3092\u958b\u3051\u307e\u305b\u3093\u3067\u3057\u305f\uff1a", L"\ud30c\uc77c\uc744 \uc5f4 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4:" },
@@ -651,6 +653,14 @@ struct BuiltinTranslation {
     const wchar_t* it;
 };
 const BuiltinTranslation kBuiltinTranslations[] = {
+    { "settings.notifications",
+      L"Benachrichtigungen anzeigen",
+      L"Afficher les notifications",
+      L"Mostra le notifiche" },
+    { "settings.notifications.hint",
+      L"Kopier-, Speicher- und Statusmeldungen; Warnungen bleiben",
+      L"Copie, enregistrement et \u00E9tat ; les avertissements restent",
+      L"Copia, salvataggio e stato; gli avvisi restano" },
     { "help.title",
       L"Tastaturk\u00FCrzel",
       L"Raccourcis clavier",

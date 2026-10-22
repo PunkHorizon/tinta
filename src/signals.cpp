@@ -247,9 +247,33 @@ void chipShadow(App& app, const D2D1_RECT_F& r, float radius, float alpha) {
 
 }  // namespace
 
+// Messages the "Show notifications" setting silences (#273): information
+// and confirmations that drain on their own. Warnings, errors, and chips
+// with an action or that wait for an answer always show.
+static bool quietSignal(int severity, int action, bool drains) {
+    return (severity == SIG_INFO || severity == SIG_SUCCESS) && action == SIGA_NONE && drains;
+}
+
+void signalSetNotifications(App& app, bool show) {
+    app.showNotifications = show;
+    if (show) return;
+    // Silenced messages already up, or parked on the bell, go too, so the
+    // bell leaves with them unless something that matters is parked
+    auto quiet = [](const App::SignalChip& c) {
+        return c.transient || quietSignal(c.severity, c.action, c.drains);
+    };
+    app.signalChips.erase(std::remove_if(app.signalChips.begin(), app.signalChips.end(), quiet),
+                          app.signalChips.end());
+    app.signalTray.erase(std::remove_if(app.signalTray.begin(), app.signalTray.end(), quiet),
+                         app.signalTray.end());
+    if (app.signalTray.empty()) app.signalTrayOpen = false;
+    if (app.hwnd) InvalidateRect(app.hwnd, nullptr, FALSE);
+}
+
 void signalPush(App& app, int severity, int icon, std::wstring text,
                 std::wstring emph, std::wstring context, int action,
                 int closeAction, bool drains, const D2D1_RECT_F* docAnchor) {
+    if (!app.showNotifications && quietSignal(severity, action, drains)) return;
     App::SignalChip chip;
     chip.id = app.signalIdCounter++;
     chip.severity = severity;
@@ -289,6 +313,9 @@ void signalPushKey(App& app, int severity, int icon, const char* trKey,
 }
 
 void signalHint(App& app, int icon, std::wstring text, std::wstring emph) {
+    // Silenced like any other information (#273); checked here, before the
+    // push, because the chip it shapes is the one the push appends
+    if (!app.showNotifications) return;
     signalPush(app, SIG_INFO, icon, std::move(text), std::move(emph));
     App::SignalChip& chip = app.signalChips.back();
     chip.transient = true;

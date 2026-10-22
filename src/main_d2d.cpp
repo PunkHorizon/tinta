@@ -1920,6 +1920,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     app.browserFocusPath = savedSettings.browserFocusPath;
     app.openInTabs = savedSettings.openInTabs;
     app.keepDeletedTabs = savedSettings.keepDeletedTabs;
+    // Persisted when toggled and kept as on disk at exit, like openInTabs
+    app.showNotifications = savedSettings.showNotifications;
     app.editorAssists = savedSettings.editorAssists;
     app.showWordCount = savedSettings.showWordCount;
     app.printMarginMm = savedSettings.printMarginMm;

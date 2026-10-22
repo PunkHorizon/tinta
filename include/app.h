@@ -226,6 +226,9 @@ struct Settings {
     // Notepad model); off restores one window per document
     bool openInTabs = true;
     bool keepDeletedTabs = false; // retain viewer source in RAM until close
+    // Bottom-right info and success messages (#273); warnings, errors and
+    // messages that ask something always show
+    bool showNotifications = true;
     // Last session's open tabs, restored on the next plain launch
     std::vector<std::string> sessionTabs;
     int sessionActive = 0;
@@ -1027,6 +1030,7 @@ struct App {
     // Plain file launches join this window as tabs (settings toggle)
     bool openInTabs = true;
     bool keepDeletedTabs = false;
+    bool showNotifications = true;  // settings toggle (#273), see signals.h
     int folderSearchGeneration = 0;
     struct FolderMatch {
         std::wstring snippet;

@@ -2572,7 +2572,8 @@ void settingsChip(App& app, float& x, float y, const wchar_t* label, bool active
 D2D1_RECT_F settingsPanelRect(const App& app) {
     float w = std::min(dpi(app, app.settingsSection == 3 ? 980.0f : 760.0f), app.width - dpi(app, app.settingsSection == 3 ? 32.0f : 80.0f));
     // Leave room for the last row and localized footer in every section.
-    const float tall = app.settingsSection == 3 ? 650.0f : 590.0f;
+    // Appearance holds a sixth row since notifications joined (#273)
+    const float tall = app.settingsSection == 3 || app.settingsSection == 1 ? 650.0f : 590.0f;
     float h = std::min(dpi(app, tall), app.height - dpi(app, 64.0f));
     float x = (app.width - w) / 2;
     float y = (app.height - h) / 2 + (1 - app.settingsAnimation) * dpi(app, 30.0f);
@@ -2990,6 +2991,14 @@ void renderSettingsOverlay(App& app) {
             // The create action is the accent-filled primary button
             settingsChip(app, bx2, chipY, tr(app, "settings.new"), true, SET_NEW_THEME, anim, fmt);
         }
+        cy += rowCardH + cardGap;
+        // Bottom-right messages (#273): warnings and questions always show
+        card(rowCardH);
+        cardLabel(tr(app, "settings.notifications"), tr(app, "settings.notifications.hint"),
+                  dpi(app, 60.0f));
+        settingsToggle(app, cx + cw - cardPad - dpi(app, 40.0f),
+                       cy + (rowCardH - dpi(app, 20.0f)) * 0.5f,
+                       app.showNotifications, SET_TOGGLE_NOTIFICATIONS, anim);
     } else {  // Editor
         card(rowCardH);
         cardLabel(tr(app, "settings.word_wrap"), tr(app, "settings.word_wrap.hint"), dpi(app, 60.0f));

@@ -51,6 +51,10 @@ void signalHintKey(App& app, int icon, const char* trKey);
 // Fade every hint at once: leaving edit mode retires its hints, so a
 // "press Esc again" never outlives the mode it was about
 void signalFadeHints(App& app);
+// The "Show notifications" setting (#273). Off, information and success
+// messages (copy confirmations, hints) are not shown and the ones already
+// up or parked leave; warnings, errors and chips that ask something stay.
+void signalSetNotifications(App& app, bool show);
 
 // True while chips are draining or animating (keeps TIMER_NOTIFICATION)
 bool signalsNeedTicks(const App& app);
