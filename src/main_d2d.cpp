@@ -1048,6 +1048,9 @@ render_document:
         if (app.showSearch) renderSearchOverlay(app);
     }
 
+    // Ctrl+G's go-to-line prompt, at the top of the pane it acts on (#276)
+    renderGotoLinePrompt(app);
+
     // Signal chips: every notification, one bottom-right system (t13).
     // Drawn after the edit-mode clip pops and above the side panels, so
     // chips reach the corner in both modes and over a pinned Contents

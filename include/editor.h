@@ -92,6 +92,18 @@ void rebuildLineStarts(App& app);
 size_t editorTopVisibleLine(App& app);
 // Scrolls the edit-mode preview to follow the editor's top line
 void syncPreviewToEditor(App& app);
+
+// Ctrl+G, go to line (#276): a prompt over the editor or the reading view.
+// While open it takes every key; Enter jumps, Esc closes.
+void gotoLineOpenPrompt(App& app);
+bool gotoLineKeyDown(App& app, HWND hwnd, WPARAM key);
+void gotoLineChar(App& app, wchar_t ch);
+// Lines in the document being edited or read
+size_t gotoLineCount(const App& app);
+// 1-based, clamped to the document: the editor's caret moves to the line's
+// start, centred; the reading view scrolls to where the line is drawn
+void gotoLineJump(App& app, size_t line);
+void renderGotoLinePrompt(App& app);
 std::string toUtf8(const std::wstring& wstr);
 
 #endif // TINTA_EDITOR_H

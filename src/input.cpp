@@ -1894,6 +1894,11 @@ static void toggleApplicationMenu(App& app, HWND hwnd, bool keyboard = false) {
 void handleMouseDown(App& app, HWND hwnd, WPARAM, LPARAM lParam) {
     // A fresh press is a new gesture, even if a cancelled drag released elsewhere.
     app.swallowNextMouseUp = false;
+    // A click elsewhere puts the go-to-line prompt away (#276)
+    if (app.gotoLineOpen) {
+        app.gotoLineOpen = false;
+        InvalidateRect(hwnd, nullptr, FALSE);
+    }
     tabHoverCardDismiss(app, hwnd);
     // Settings owns the entire click, including the title strip behind it.
     // Sliders drag from the press; dismissal and other actions use release.
@@ -3549,6 +3554,19 @@ bool handleKeyDown(App& app, HWND hwnd, WPARAM wParam) {
     float maxScroll = std::max(0.0f, app.contentHeight - app.height);
     bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
 
+    // Go to line (#276): the prompt takes every key while open; Ctrl+G
+    // opens it over the editor or the reading view of a document
+    if (app.gotoLineOpen) return gotoLineKeyDown(app, hwnd, wParam);
+    if (ctrl && wParam == 'G' && !(GetKeyState(VK_SHIFT) & 0x8000) &&
+        !(GetKeyState(VK_MENU) & 0x8000) && !app.showLightbox && !app.showSettings &&
+        !app.showHelp && !app.showPrintPreview && !app.showThemeEditor &&
+        !app.showShortcutEditor && !app.annotEditorOpen && !app.confirmExitPending &&
+        !app.createRefPending && !startPageActive(app)) {
+        gotoLineOpenPrompt(app);
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return true;
+    }
+
     // Lightbox: dismiss keys close it, everything else is swallowed
     if (app.showLightbox) {
         if (wParam == VK_ESCAPE || wParam == VK_RETURN ||
@@ -4228,6 +4246,18 @@ void handleCharInput(App& app, HWND hwnd, WPARAM wParam) {
     // The Enter that confirmed the create-reference dialog must not leak
     // a newline into the editor it just opened
     if (std::chrono::steady_clock::now() < app.swallowCharsUntil) return;
+
+    // The go-to-line prompt takes its digits, and swallows the rest (#276)
+    if (app.gotoLineSwallowChar) {
+        const wchar_t swallow = app.gotoLineSwallowChar;
+        app.gotoLineSwallowChar = 0;
+        if ((wchar_t)wParam == swallow) return;  // the closing key's own character
+    }
+    if (app.gotoLineOpen) {
+        gotoLineChar(app, (wchar_t)wParam);
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return;
+    }
 
     // Annotation note editor takes all typing (#126)
     if (app.annotEditorOpen && !app.editMode) {

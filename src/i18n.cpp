@@ -64,6 +64,7 @@ const Entry kEntries[] = {
     { "editor.read", L"Read \xb7 Ctrl+Shift+E", L"\u9605\u8bfb \xb7 Ctrl+Shift+E", L"\u8aad\u3080 \xb7 Ctrl+Shift+E", L"\uc77d\uae30 \xb7 Ctrl+Shift+E" },
     { "editor.resume", L"Edit \xb7 Esc", L"\u7f16\u8f91 \xb7 Esc", L"\u7de8\u96c6 \xb7 Esc", L"\ud3b8\uc9d1 \xb7 Esc" },
     { "editor.read_help", L"Read unsaved changes / return to editing", L"\u9884\u89c8\u672a\u4fdd\u5b58\u7684\u66f4\u6539 / \u8fd4\u56de\u7f16\u8f91", L"\u672a\u4fdd\u5b58\u306e\u5909\u66f4\u3092\u8aad\u3080 / \u7de8\u96c6\u306b\u623b\u308b", L"\uc800\uc7a5\ud558\uc9c0 \uc54a\uc740 \ubcc0\uacbd \uc0ac\ud56d \uc77d\uae30 / \ud3b8\uc9d1\uc73c\ub85c \ub3cc\uc544\uac00\uae30" },
+    { "editor.goto_line", L"Go to line", L"\u8F6C\u5230\u884C", L"\u884C\u3078\u79FB\u52D5", L"\uC904\uB85C \uC774\uB3D9" },
     { "editor.count.words", L"%s words", L"%s \u5b57", L"%s \u8a9e", L"%s \ub2e8\uc5b4" },
     { "editor.count.word", L"%s word", L"%s \u5b57", L"%s \u8a9e", L"%s \ub2e8\uc5b4" },
     { "editor.count.chars", L"%s characters", L"%s \u5b57\u7b26", L"%s \u6587\u5b57", L"%s \uc790" },
@@ -653,6 +654,10 @@ struct BuiltinTranslation {
     const wchar_t* it;
 };
 const BuiltinTranslation kBuiltinTranslations[] = {
+    { "editor.goto_line",
+      L"Gehe zu Zeile",
+      L"Aller \u00E0 la ligne",
+      L"Vai alla riga" },
     { "settings.notifications",
       L"Benachrichtigungen anzeigen",
       L"Afficher les notifications",

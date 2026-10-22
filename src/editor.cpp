@@ -4297,3 +4297,139 @@ void renderEditor(App& app, float editorWidth) {
 
     app.renderTarget->PopAxisAlignedClip();
 }
+
+// --- Go to line (#276) ---
+
+// The editor's source when it shows, the reading view's otherwise (the
+// reading view inside edit mode included)
+static bool gotoLineInEditor(const App& app) {
+    return app.editMode && !app.editorReadingPreview;
+}
+
+size_t gotoLineCount(const App& app) {
+    // Inside edit mode both views show the editor's text
+    if (app.editMode) return std::max<size_t>(1, app.editorLineStarts.size());
+    return 1 + (size_t)std::count(app.sourceText.begin(), app.sourceText.end(), '\n');
+}
+
+void gotoLineOpenPrompt(App& app) {
+    if (app.showSearch) closeSearchInput(app);  // both sit at the top
+    app.gotoLineOpen = true;
+    app.gotoLineInput.clear();
+}
+
+void gotoLineJump(App& app, size_t line) {
+    line = std::clamp<size_t>(line, 1, gotoLineCount(app));
+    if (gotoLineInEditor(app)) {
+        app.editorExtraCarets.clear();
+        app.editorHasSelection = false;
+        app.editorCursorPos = app.editorLineStarts[line - 1];
+        app.editorSelStart = app.editorSelEnd = app.editorCursorPos;
+        app.editorDesiredCol = -1;
+        app.editorCaretUpstreamPos = std::wstring::npos;
+        // The line a little above the middle, as search matches land (#260)
+        ensureEditorRowMetrics(app);
+        const float viewportH = (float)app.height - chromeTopHeight(app);
+        app.editorScrollY = std::max(0.0f, editorPosRowY(app, app.editorCursorPos, false) - viewportH * 0.4f);
+        editorEnsureCursorVisible(app);
+        resetCursorBlink(app);
+        return;
+    }
+    // The reading view: through the scroll anchors to where the line's
+    // block is drawn. An anchor's offset is its block's first text, after
+    // markers such as "## " or "- ", so the last anchor up to the line's
+    // end is the block that starts on the line, or the one it continues,
+    // as for the caret's block in the preview. The offsets count in the
+    // text that was parsed: the editor's inside edit mode, whose reading
+    // view may show edits the viewer's source has not seen.
+    size_t end = SIZE_MAX;  // the last line: every anchor
+    if (app.editMode) {
+        if (line < app.editorLineByteOffsets.size()) end = app.editorLineByteOffsets[line] - 1;
+    } else {
+        size_t start = 0;
+        for (size_t i = 0, current = 1; i < app.sourceText.size() && current < line; ++i) {
+            if (app.sourceText[i] == '\n') {
+                ++current;
+                start = i + 1;
+            }
+        }
+        end = std::min(end, app.sourceText.find('\n', start));
+    }
+    ensureLayoutComplete(app);  // anchors far down exist only once laid out
+    float y = 0.0f;
+    for (const auto& anchor : app.scrollAnchors) {
+        if (anchor.sourceOffset > end) break;
+        y = anchor.renderedY - documentContentTop(app);
+    }
+    const float maxScroll = std::max(0.0f, app.contentHeight - (float)app.height);
+    app.scrollY = app.targetScrollY = std::clamp(y, 0.0f, maxScroll);
+}
+
+bool gotoLineKeyDown(App& app, HWND hwnd, WPARAM key) {
+    if (key == VK_ESCAPE || key == VK_RETURN) {
+        const std::wstring typed = app.gotoLineInput;
+        app.gotoLineOpen = false;
+        app.gotoLineInput.clear();
+        if (key == VK_RETURN && !typed.empty()) gotoLineJump(app, (size_t)std::wcstoull(typed.c_str(), nullptr, 10));
+        // The Enter or Esc character that follows must not reach the
+        // editor; only that one, so quick typing afterwards is kept
+        app.gotoLineSwallowChar = key == VK_RETURN ? L'\r' : (wchar_t)0x1B;
+    } else if (key == VK_BACK && !app.gotoLineInput.empty()) {
+        app.gotoLineInput.pop_back();
+    }
+    InvalidateRect(hwnd, nullptr, FALSE);
+    return true;  // the prompt takes every key while it is open
+}
+
+void gotoLineChar(App& app, wchar_t ch) {
+    if (ch >= L'0' && ch <= L'9' && app.gotoLineInput.size() < 9) app.gotoLineInput += ch;
+}
+
+void renderGotoLinePrompt(App& app) {
+    IDWriteTextFormat* format = app.searchTextFormat;
+    if (!app.gotoLineOpen || !format) return;
+    // Centred at the top of the pane it acts on
+    const float paneLeft = gotoLineInEditor(app) ? editRailWidth(app) : documentViewportX(app);
+    const float paneWidth = gotoLineInEditor(app) ? editorPaneWidth(app) - editRailWidth(app)
+                                                  : documentViewportWidth(app);
+    const float w = std::min(dpi(app, 300.0f), paneWidth - dpi(app, 16.0f));
+    const float h = dpi(app, 38.0f);
+    const float x = paneLeft + (paneWidth - w) * 0.5f;
+    const float y = chromeTopHeight(app) + dpi(app, 12.0f);
+    const D2D1_RECT_F box = D2D1::RectF(x, y, x + w, y + h);
+    D2D1_COLOR_F shadow = D2D1::ColorF(0, 0, 0, app.theme.isDark ? 0.35f : 0.12f);
+    app.brush->SetColor(shadow);
+    app.renderTarget->FillRoundedRectangle(
+        D2D1::RoundedRect(D2D1::RectF(box.left, box.top + dpi(app, 2.0f), box.right, box.bottom + dpi(app, 3.0f)),
+                          dpi(app, 9.0f), dpi(app, 9.0f)), app.brush);
+    app.brush->SetColor(app.theme.background);
+    app.renderTarget->FillRoundedRectangle(D2D1::RoundedRect(box, dpi(app, 8.0f), dpi(app, 8.0f)), app.brush);
+    D2D1_COLOR_F border = app.theme.accent;
+    border.a = 0.6f;
+    app.brush->SetColor(border);
+    app.renderTarget->DrawRoundedRectangle(D2D1::RoundedRect(box, dpi(app, 8.0f), dpi(app, 8.0f)), app.brush,
+                                           dpi(app, 1.2f));
+    // "Go to line  123|        1–N"
+    D2D1_COLOR_F muted = app.theme.text;
+    muted.a = 0.55f;
+    const float pad = dpi(app, 12.0f);
+    // The format draws from the top: centre its line in the box
+    const float textTop = box.top + (h - format->GetFontSize() * 1.33f) * 0.5f;
+    const std::wstring label = tr(app, "editor.goto_line");
+    const float labelW = measureText(app, label.c_str(), format);
+    app.brush->SetColor(muted);
+    app.renderTarget->DrawText(label.c_str(), (UINT32)label.size(), format,
+                               D2D1::RectF(box.left + pad, textTop, box.right - pad, box.bottom), app.brush);
+    const std::wstring range = L"1\u2013" + std::to_wstring(gotoLineCount(app));
+    const float rangeW = measureText(app, range.c_str(), format);
+    app.renderTarget->DrawText(range.c_str(), (UINT32)range.size(), format,
+                               D2D1::RectF(box.right - pad - rangeW, textTop, box.right - pad, box.bottom), app.brush);
+    const float inputX = box.left + pad + labelW + dpi(app, 12.0f);
+    app.brush->SetColor(app.theme.text);
+    app.renderTarget->DrawText(app.gotoLineInput.c_str(), (UINT32)app.gotoLineInput.size(), format,
+                               D2D1::RectF(inputX, textTop, box.right - pad - rangeW, box.bottom), app.brush);
+    const float caretX = inputX + measureText(app, app.gotoLineInput.c_str(), format) + dpi(app, 1.0f);
+    app.brush->SetColor(app.theme.accent);
+    app.renderTarget->FillRectangle(
+        D2D1::RectF(caretX, box.top + h * 0.25f, caretX + dpi(app, 1.5f), box.bottom - h * 0.25f), app.brush);
+}

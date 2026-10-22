@@ -1,6 +1,10 @@
 #include "i18n.h"
 
+#include <cctype>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <string>
 #include <set>
 #include <regex>
@@ -17,6 +21,72 @@ void check(bool condition, const char* message) {
 
 bool contains(const wchar_t* haystack, const wchar_t* needle) {
     return std::wstring(haystack).find(needle) != std::wstring::npos;
+}
+
+bool identifierChar(char c) { return std::isalnum((unsigned char)c) || c == '_'; }
+
+// The sources build without /utf-8, so MSVC reads them in the system code
+// page. A narrow literal keeps its bytes, so the UTF-8 text in one (the
+// start page's documents) passes through, but a wide literal is converted:
+// a raw en dash in the go-to-line prompt's range showed as three Latin-1
+// characters (#276). Wide, u8, u and U literals spell such text with \u
+// escapes; comments may hold anything.
+void wideLiteralsAreAscii(const std::filesystem::path& path, int& scanned) {
+    std::ifstream file(path, std::ios::binary);
+    const std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    ++scanned;
+    int line = 1;
+    auto report = [&](size_t from, size_t to) {
+        for (size_t i = from; i < to; ++i) {
+            if ((unsigned char)text[i] < 0x80) continue;
+            const std::string message = "raw non-ASCII text in a wide literal at " +
+                                        path.filename().string() + ":" + std::to_string(line);
+            check(false, message.c_str());
+            return;
+        }
+    };
+    for (size_t i = 0; i < text.size(); ++i) {
+        const char c = text[i];
+        if (c == '\n') { ++line; continue; }
+        if (c == '/' && i + 1 < text.size() && text[i + 1] == '/') {
+            while (i + 1 < text.size() && text[i + 1] != '\n') ++i;
+            continue;
+        }
+        if (c == '/' && i + 1 < text.size() && text[i + 1] == '*') {
+            const size_t end = text.find("*/", i + 2);
+            const size_t stop = end == std::string::npos ? text.size() : end + 2;
+            for (size_t j = i; j < stop; ++j) line += text[j] == '\n';
+            i = stop - 1;
+            continue;
+        }
+        // Numbers first, so 1'000 is not taken for a character literal
+        if (std::isdigit((unsigned char)c) && (i == 0 || !identifierChar(text[i - 1]))) {
+            while (i + 1 < text.size() && (identifierChar(text[i + 1]) || text[i + 1] == '.' || text[i + 1] == '\'')) ++i;
+            continue;
+        }
+        if (c != '"' && c != '\'') continue;
+        size_t prefix = i;
+        while (prefix > 0 && identifierChar(text[prefix - 1])) --prefix;
+        const std::string encoding = text.substr(prefix, i - prefix);
+        if (c == '"' && !encoding.empty() && encoding.back() == 'R') {
+            // R"delimiter( ... )delimiter"
+            const size_t open = text.find('(', i);
+            if (open == std::string::npos) break;
+            const std::string close = ")" + text.substr(i + 1, open - i - 1) + "\"";
+            const size_t end = text.find(close, open);
+            const size_t stop = end == std::string::npos ? text.size() : end + close.size();
+            if (encoding != "R") report(i, stop);
+            for (size_t j = i; j < stop; ++j) line += text[j] == '\n';
+            i = stop - 1;
+            continue;
+        }
+        const size_t start = i;
+        for (++i; i < text.size() && text[i] != c && text[i] != '\n'; ++i) {
+            if (text[i] == '\\') ++i;
+        }
+        if (!encoding.empty()) report(start, std::min(i, text.size()));
+        if (i < text.size() && text[i] == '\n') ++line;
+    }
 }
 
 } // namespace
@@ -55,7 +125,7 @@ int main() {
         check(std::wstring(tr(ru, entry.key)) == entry.text, "Russian translation lookup resolves the built-in text");
         check(formats(tr(en, entry.key)) == formats(entry.text), "Russian preserves printf arguments and order");
     }
-    check(russianKeys.size() == 359, "Russian covers every current interface key");
+    check(russianKeys.size() == 360, "Russian covers every current interface key");
     check(en == 0, "en is the first registry entry");
     check(zh == 1, "zh is the second registry entry");
     check(de >= 0, "de is registered");
@@ -128,6 +198,15 @@ int main() {
         check(contains(fmt, L"%d"), "match_count keeps %d");
         check(contains(fmt, L"%zu"), "match_count keeps %zu");
     }
+
+    int scanned = 0;
+    for (const char* folder : {"src", "include"}) {
+        for (const auto& entry : std::filesystem::directory_iterator(std::filesystem::path(TINTA_SOURCE_DIR) / folder)) {
+            const auto extension = entry.path().extension();
+            if (extension == ".cpp" || extension == ".h" || extension == ".inc") wideLiteralsAreAscii(entry.path(), scanned);
+        }
+    }
+    check(scanned > 50, "the source scan finds the sources");
 
     if (failures == 0) {
         std::cout << "i18n tests passed\n";
