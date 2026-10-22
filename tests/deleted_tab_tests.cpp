@@ -27,8 +27,10 @@ struct SavePickerProbe {
     std::wstring suggestedName;
 };
 SavePickerProbe* pickerProbe = nullptr;
+// Runs every 50 ms until the dialog is ready: on a slow machine the dialog
+// is still filling in its default name when it activates, and a name typed
+// before that was put back, so OK saved under the original name
 void CALLBACK pickerAction(HWND dialog, UINT, UINT_PTR timer, DWORD) {
-    KillTimer(dialog, timer);
     HWND filename = GetDlgItem(dialog, edt1);
     // Modern Windows nests the filename edit (1001) inside DirectUI;
     // legacy dialogs expose edt1 directly.
@@ -42,12 +44,25 @@ void CALLBACK pickerAction(HWND dialog, UINT, UINT_PTR timer, DWORD) {
         return TRUE;
     }, (LPARAM)&filename);
     wchar_t name[MAX_PATH]{};
-    GetWindowTextW(filename, name, MAX_PATH);
-    pickerProbe->suggestedName = name;
+    if (!filename || !IsWindowVisible(filename) || !GetWindowTextW(filename, name, MAX_PATH))
+        return;  // not ready yet: the default name is not in the box
+    if (pickerProbe->suggestedName.empty()) pickerProbe->suggestedName = name;
     if (pickerProbe->destination) {
-        SetWindowTextW(filename, pickerProbe->destination);
+        // Type the name, and press OK only once a later tick still finds
+        // it. Typed, not set: the modern dialog ignores text set with
+        // SetWindowText and returns its own default name on OK.
+        if (std::wstring(name) != pickerProbe->destination) {
+            SendMessageW(filename, EM_SETSEL, 0, -1);
+            for (const wchar_t* c = pickerProbe->destination; *c; ++c)
+                SendMessageW(filename, WM_CHAR, *c, 1);
+            return;
+        }
+        KillTimer(dialog, timer);
         PostMessageW(dialog, WM_COMMAND, IDOK, 0);
-    } else PostMessageW(dialog, WM_COMMAND, IDCANCEL, 0);
+    } else {
+        KillTimer(dialog, timer);
+        PostMessageW(dialog, WM_COMMAND, IDCANCEL, 0);
+    }
 }
 void CALLBACK pickerTimeout(HWND dialog, UINT, UINT_PTR timer, DWORD) {
     KillTimer(dialog, timer);
@@ -60,7 +75,7 @@ LRESULT CALLBACK pickerHook(int code, WPARAM wParam, LPARAM lParam) {
         GetClassNameW(dialog, name, 32);
         if (std::wstring(name) == L"#32770") {
             ++pickerProbe->shown;
-            SetTimer(dialog, 501, 25, pickerAction);
+            SetTimer(dialog, 501, 50, pickerAction);
             SetTimer(dialog, 502, 5000, pickerTimeout);
         }
     }
@@ -187,7 +202,10 @@ int runDeletedTabTests() {
     check(app.editMode && app.editorDirty && toUtf8(app.editorText) == source,
           "parked recovery editor survives switching");
     const auto cancelled = withSavePicker(nullptr, [&] { saveEditorFile(app, app.hwnd); });
-    check(cancelled.shown == 1 && cancelled.suggestedName == a.filename().wstring(),
+    // Windows hides known extensions by default, and the dialog then shows
+    // the name without .md
+    check(cancelled.shown == 1 && (cancelled.suggestedName == a.filename().wstring() ||
+                                   cancelled.suggestedName == a.stem().wstring()),
           "Save on a missing original opens Save As with its previous name");
     check(!fs::exists(a) && app.editMode && app.editorDirty &&
           app.currentFile == toUtf8(a.wstring()) && toUtf8(app.editorText) == source,
@@ -269,7 +287,8 @@ int runDeletedTabTests() {
     fs::remove(folderCopy);
     const auto folderName = folderCopy.wstring();
     const auto folderSave = withSavePicker(folderName.c_str(), [&] { saveEditorFile(app, app.hwnd); });
-    check(folderSave.shown == 1 && folderSave.suggestedName == L"Gone.md" &&
+    check(folderSave.shown == 1 &&
+              (folderSave.suggestedName == L"Gone.md" || folderSave.suggestedName == L"Gone") &&
           !app.editorDirty && read(folderCopy) == source && !fs::exists(removedFolder),
           "a deleted parent folder also requires Save As and is never recreated silently");
     // Closing must handle a neighbor that cannot be activated with retention off.

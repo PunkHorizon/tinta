@@ -120,3 +120,22 @@ wide_table_layout, window_drag_and_title_space, tab_drop_position, deleted_tab,
 tab_hover_card and search_results_panel. This was a targeted regression run,
 not the complete repository suite. The upstream CRLF scroll-sync limitation
 recorded above is unchanged and that check was not rerun in this audit.
+
+## Follow-up after merging (2026-10-22)
+
+On a machine with Windows' default "hide extensions for known file types"
+and a slower dialog (a VM over Remote Desktop), the Save As checks failed
+though Tinta behaved correctly:
+
+- the dialog shows the suggested name without `.md`, so the checks now
+  accept the name with or without its extension;
+- the modern dialog ignores a name set with `SetWindowText` and returns its
+  default on OK (which recreated the deleted original), so the probe now
+  types the name with `WM_CHAR`;
+- a name typed 25 ms after activation could be overwritten while the dialog
+  was still filling in its default, so the probe now waits for the default
+  name, types, and presses OK only once a later tick still finds the typed
+  name.
+
+The suite then passed three runs in a row in about 2.5 s, against 30 s of
+picker timeouts before.
