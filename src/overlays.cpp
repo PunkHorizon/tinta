@@ -1873,6 +1873,21 @@ void renderThemeChooser(App& app) {
     }
 }
 
+// Centred text in a rect, aligned on its own layout: the shared formats it
+// draws with are also the TOC's, the search panel's and the tab hover
+// card's, which expect leading alignment (#270)
+static void drawCenteredText(App& app, const wchar_t* text, IDWriteTextFormat* format,
+                             const D2D1_RECT_F& rect) {
+    IDWriteTextLayout* layout = nullptr;
+    if (!format || FAILED(app.dwriteFactory->CreateTextLayout(text, (UINT32)wcslen(text), format,
+            rect.right - rect.left, rect.bottom - rect.top, &layout))) {
+        return;
+    }
+    layout->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+    app.renderTarget->DrawTextLayout(D2D1::Point2F(rect.left, rect.top), layout, app.brush);
+    layout->Release();
+}
+
 void renderHelpOverlay(App& app) {
     // Animate in
     if (app.helpAnimation < 1.0f) {
@@ -1915,13 +1930,11 @@ void renderHelpOverlay(App& app) {
     float titleBottomY = panelY + dpi(app, 55.0f);
     IDWriteTextFormat* titleFormat = app.themeTitleFormat;
     if (titleFormat) {
-        titleFormat->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
         D2D1_COLOR_F titleColor = app.theme.heading;
         titleColor.a = anim;
         app.brush->SetColor(titleColor);
-        const wchar_t* helpTitle = tr(app, "help.title");
-        app.renderTarget->DrawText(helpTitle, (UINT32)wcslen(helpTitle), titleFormat,
-            D2D1::RectF(panelX, panelY + dpi(app, 15.0f), panelX + panelWidth, titleBottomY), app.brush);
+        drawCenteredText(app, tr(app, "help.title"), titleFormat,
+            D2D1::RectF(panelX, panelY + dpi(app, 15.0f), panelX + panelWidth, titleBottomY));
     }
 
     // Version badge in the panel's top-right corner (from CMake's
@@ -2094,13 +2107,11 @@ void renderHelpOverlay(App& app) {
     drawSection(tr(app, "help.section.general"), generalEntries, (int)_countof(generalEntries));
 
     // Footer hint
-    normalFmt->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
     D2D1_COLOR_F footerColor = app.theme.text;
     footerColor.a = 0.55f * anim;
     app.brush->SetColor(footerColor);
-    const wchar_t* helpFooter = tr(app, "help.footer");
-    app.renderTarget->DrawText(helpFooter, (UINT32)wcslen(helpFooter), normalFmt,
-        D2D1::RectF(panelX, y, panelX + panelWidth, y + lineH), app.brush);
+    drawCenteredText(app, tr(app, "help.footer"), normalFmt,
+        D2D1::RectF(panelX, y, panelX + panelWidth, y + lineH));
 
     app.renderTarget->PopAxisAlignedClip();
 

@@ -3,6 +3,7 @@
 #include "editor.h"
 #include "i18n.h"
 #include "input.h"
+#include "overlays.h"
 #include "settings.h"
 #include "utils.h"
 
@@ -50,6 +51,44 @@ bool hoverUntilCard(App& app, int tab) {
     paint(app);
     return cardShown(app);
 }
+}
+
+// Left edge of a line laid out in a format, as the TOC and this card lay out
+// their rows
+float textLeft(App& app, IDWriteTextFormat* format, const wchar_t* text) {
+    IDWriteTextLayout* layout = nullptr;
+    if (FAILED(app.dwriteFactory->CreateTextLayout(text, (UINT32)wcslen(text), format,
+                                                  400.0f, 100.0f, &layout))) {
+        return -1.0f;
+    }
+    DWRITE_HIT_TEST_METRICS metrics{};
+    float x = 0.0f, y = 0.0f;
+    layout->HitTestTextPosition(0, FALSE, &x, &y, &metrics);
+    layout->Release();
+    return x;
+}
+
+// #270: Help centres its title and footer. It did so by centring the shared
+// formats, which the TOC, the search panel and this card also draw with, and
+// never set them back: after Help, TOC rows and the card's folder path were
+// centred. Help now leaves the shared formats as it found them.
+void helpLeavesSharedFormats(App& app) {
+    IDWriteTextFormat* shared[] = {app.tocFormat, app.tocFormatBold, app.themeTitleFormat,
+                                   app.folderBrowserFormat};
+    DWRITE_TEXT_ALIGNMENT before[4];
+    for (int i = 0; i < 4; i++) before[i] = shared[i]->GetTextAlignment();
+    check(textLeft(app, app.tocFormat, L"Heading") < 1.0f, "TOC rows start at the left before Help");
+    app.showHelp = true;
+    app.helpAnimation = 1.0f;
+    app.renderTarget->BeginDraw();
+    renderHelpOverlay(app);
+    check(SUCCEEDED(app.renderTarget->EndDraw()), "Help renders");
+    app.showHelp = false;
+    bool same = true;
+    for (int i = 0; i < 4; i++) same = same && shared[i]->GetTextAlignment() == before[i];
+    check(same, "Help leaves the shared formats' alignment as it found it");
+    check(textLeft(app, app.tocFormat, L"Heading") < 1.0f,
+          "after Help, TOC rows and the card's path still start at the left");
 }
 
 int runTabHoverCardTests() {
@@ -121,6 +160,9 @@ int runTabHoverCardTests() {
         for (float scale : {1.0f, 1.5f}) {
             app.contentScale = scale;
             updateTextFormats(app);
+            app.width = (int)(1050 * scale);
+            app.height = (int)(900 * scale);
+            helpLeavesSharedFormats(app);
             for (int width : {650, 1050}) {
                 app.width = (int)(width * scale);
                 app.height = (int)(900 * scale);
