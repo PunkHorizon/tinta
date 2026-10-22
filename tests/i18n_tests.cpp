@@ -2,6 +2,8 @@
 
 #include <iostream>
 #include <string>
+#include <set>
+#include <regex>
 
 namespace {
 
@@ -32,6 +34,28 @@ int main() {
     int it = languageIndexById("it");
     int ja = languageIndexById("ja");
     int ko = languageIndexById("ko");
+    int ru = languageIndexById("ru");
+    check(ru >= 0 && languageHasTranslations(ru), "Russian ships built-in translations and is selectable");
+    check(languageIndexById("RU-ru") == ru, "ru-RU aliases to Russian");
+    check(std::wstring(languageNameAt(ru)) == L"\u0420\u0443\u0441\u0441\u043a\u0438\u0439", "Russian has its native name");
+    static const struct { const char* key; const wchar_t* text; } russian[] = {
+#include "../src/i18n_ru.inc"
+    };
+    std::set<std::string> russianKeys;
+    const std::wregex placeholder(L"%(?:[0-9]+\\$)?(?:\\.[0-9]+)?(?:zu|ls|[sdf])");
+    auto formats = [&](const wchar_t* text) {
+        std::wstring value(text);
+        std::wstring result;
+        for (auto it = std::wsregex_iterator(value.begin(), value.end(), placeholder);
+             it != std::wsregex_iterator(); ++it) result += it->str() + L";";
+        return result;
+    };
+    for (const auto& entry : russian) {
+        check(russianKeys.insert(entry.key).second, "Russian translation keys are unique");
+        check(std::wstring(tr(ru, entry.key)) == entry.text, "Russian translation lookup resolves the built-in text");
+        check(formats(tr(en, entry.key)) == formats(entry.text), "Russian preserves printf arguments and order");
+    }
+    check(russianKeys.size() == 357, "Russian covers every current interface key");
     check(en == 0, "en is the first registry entry");
     check(zh == 1, "zh is the second registry entry");
     check(de >= 0, "de is registered");

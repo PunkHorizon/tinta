@@ -13,8 +13,8 @@ const char* formatKey(fm::Format f) {
     const char* keys[]={"fm.plain","fm.large","fm.absolute","fm.relative","fm.chips","fm.hashtags","fm.comma","fm.count"};
     return keys[(int)f];
 }
-const wchar_t* kindName(fm::Kind k) {
-    const wchar_t* names[]={L"text",L"date",L"list",L"bool",L"object"};return names[(int)k];
+const wchar_t* kindName(const App& app, fm::Kind k) {
+    const char* keys[]={"fm.type.text","fm.type.date","fm.type.list","fm.type.boolean","fm.type.object"};return tr(app,keys[(int)k]);
 }
 void fill(App& app,D2D1_RECT_F r,D2D1_COLOR_F c,float radius=5) {
     app.brush->SetColor(c);app.renderTarget->FillRoundedRectangle(D2D1::RoundedRect(r,radius,radius),app.brush);
@@ -196,7 +196,7 @@ void renderFrontmatterSettings(App& app,const D2D1_RECT_F& area) {
         if((int)i==app.frontmatterDrag)fill(app,row,color(accent,.1f),0);
         text(app,L"\u2261",{x+6*s,ry,x+21*s,ry+rowH},12*s,muted);
         text(app,toWide(r.key),{x+25*s,ry,showX-36*s,ry+rowH},12*s,tc,true);
-        text(app,kindName(r.hint),{showX-33*s,ry,showX-3*s,ry+rowH},8*s,color(tc,.5f));
+        text(app,kindName(app,r.hint),{showX-33*s,ry,showX-3*s,ry+rowH},8*s,color(tc,.5f));
         int id=FM_ROW+(int)i*8;
         auto clippedHit=[&](D2D1_RECT_F bounds,int action) {
             bounds.top=std::max(bounds.top,app.frontmatterListRect.top);bounds.bottom=std::min(bounds.bottom,listBottom);
@@ -208,9 +208,9 @@ void renderFrontmatterSettings(App& app,const D2D1_RECT_F& area) {
         if(r.show)text(app,L"\u2713",{box.left+2*s,box.top-1*s,box.right,box.bottom},11*s,color(app.theme.background,enabled?1.f:.3f),true);
         if(enabled)clippedHit({showX,ry,sideX,ry+rowH},id+1);
         size_t before=app.settingsHits.size();
-        button(app,{sideX,ry+7*s,sideX+25*s,ry+30*s},L"L",id+2,!r.right,details);
-        button(app,{sideX+25*s,ry+7*s,sideX+50*s,ry+30*s},L"R",id+3,r.right,details);
-        button(app,{labelX+2*s,ry+7*s,labelX+34*s,ry+30*s},r.label?L"On":L"Off",id+4,r.label,details);
+        button(app,{sideX,ry+7*s,sideX+25*s,ry+30*s},tr(app,"fm.left_short"),id+2,!r.right,details);
+        button(app,{sideX+25*s,ry+7*s,sideX+50*s,ry+30*s},tr(app,"fm.right_short"),id+3,r.right,details);
+        button(app,{labelX+2*s,ry+7*s,labelX+34*s,ry+30*s},tr(app,r.label?"fm.label.on":"fm.label.off"),id+4,r.label,details);
         auto opts=fm::formats(r.hint);auto f=std::find(opts.begin(),opts.end(),r.format)==opts.end()?opts.front():r.format;
         std::wstring desc=tr(app,formatKey(f));
         if(r.hint==fm::Kind::List&&f!=fm::Format::Count&&r.limit)desc+=L" \u00b7 "+std::to_wstring(r.limit);
@@ -258,7 +258,7 @@ void renderFrontmatterSettings(App& app,const D2D1_RECT_F& area) {
             float ly=menu.bottom-38*s;
             text(app,tr(app,"fm.up_to"),{menu.left+10*s,ly,menu.right-90*s,ly+28*s},11*s,muted);
             button(app,{menu.right-85*s,ly,menu.right-61*s,ly+26*s},L"-",FM_LIMIT_DOWN);
-            text(app,r.limit?std::to_wstring(r.limit):L"All",{menu.right-59*s,ly,menu.right-32*s,ly+26*s},11*s,normal);
+            text(app,r.limit?std::to_wstring(r.limit):std::wstring(tr(app,"fm.all")),{menu.right-59*s,ly,menu.right-32*s,ly+26*s},11*s,normal);
             button(app,{menu.right-29*s,ly,menu.right-5*s,ly+26*s},L"+",FM_LIMIT_UP);
         }
     }

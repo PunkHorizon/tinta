@@ -477,6 +477,16 @@ if(BUILD_TESTING)
     target_compile_definitions(i18n_tests PRIVATE UNICODE _UNICODE)
     add_test(NAME i18n COMMAND i18n_tests)
 
+    add_executable(russian_ui_tests tests/russian_ui_tests.cpp ${INPUT_TEST_SOURCES})
+    target_include_directories(russian_ui_tests PRIVATE include ${md4c_SOURCE_DIR}/src)
+    target_link_libraries(russian_ui_tests PRIVATE $<TARGET_PROPERTY:tinta,LINK_LIBRARIES>)
+    target_compile_definitions(russian_ui_tests PRIVATE $<TARGET_PROPERTY:tinta,COMPILE_DEFINITIONS>
+        TINTA_RUSSIAN_UI_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/russian-interface.md")
+    add_test(NAME russian_interface COMMAND ${CMAKE_COMMAND}
+        -DTEST_BINARY=$<TARGET_FILE:russian_ui_tests>
+        -DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/russian-ui-test-$<CONFIG>
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_russian_ui_tests.cmake)
+
     add_executable(config_path_tests
         tests/config_path_tests.cpp
         src/config_dir.cpp

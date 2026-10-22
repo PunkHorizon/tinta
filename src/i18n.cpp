@@ -43,6 +43,17 @@ struct Entry {
 // Note: kept as a plain array (not unordered_map) on purpose. ~80 entries,
 // linear scan is cache-friendly and avoids a static-init ordering fiasco.
 const Entry kEntries[] = {
+    { "fm.type.text", L"text", nullptr, nullptr, nullptr },
+    { "fm.type.date", L"date", nullptr, nullptr, nullptr },
+    { "fm.type.list", L"list", nullptr, nullptr, nullptr },
+    { "fm.type.boolean", L"bool", nullptr, nullptr, nullptr },
+    { "fm.type.object", L"object", nullptr, nullptr, nullptr },
+    { "fm.left_short", L"L", nullptr, nullptr, nullptr },
+    { "fm.right_short", L"R", nullptr, nullptr, nullptr },
+    { "fm.label.on", L"On", nullptr, nullptr, nullptr },
+    { "fm.label.off", L"Off", nullptr, nullptr, nullptr },
+    { "fm.all", L"All", nullptr, nullptr, nullptr },
+    { "theme.editor.default_name", L"My theme", nullptr, nullptr, nullptr },
     { "toast.file_missing", L"File not found:", L"\u627e\u4e0d\u5230\u6587\u4ef6\uff1a", L"\u30d5\u30a1\u30a4\u30eb\u304c\u898b\u3064\u304b\u308a\u307e\u305b\u3093\uff1a", L"\ud30c\uc77c\uc744 \ucc3e\uc744 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4:" },
     { "toast.file_no_app", L"No default app is set for this file:", L"\u672a\u8bbe\u7f6e\u6253\u5f00\u6b64\u6587\u4ef6\u7684\u9ed8\u8ba4\u5e94\u7528\uff1a", L"\u3053\u306e\u30d5\u30a1\u30a4\u30eb\u306e\u65e2\u5b9a\u306e\u30a2\u30d7\u30ea\u304c\u8a2d\u5b9a\u3055\u308c\u3066\u3044\u307e\u305b\u3093\uff1a", L"\uc774 \ud30c\uc77c\uc758 \uae30\ubcf8 \uc571\uc774 \uc124\uc815\ub418\uc5b4 \uc788\uc9c0 \uc54a\uc2b5\ub2c8\ub2e4:" },
     { "toast.file_open_failed", L"Could not open file:", L"\u65e0\u6cd5\u6253\u5f00\u6587\u4ef6\uff1a", L"\u30d5\u30a1\u30a4\u30eb\u3092\u958b\u3051\u307e\u305b\u3093\u3067\u3057\u305f\uff1a", L"\ud30c\uc77c\uc744 \uc5f4 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4:" },
@@ -1462,6 +1473,10 @@ void seedBuiltinOverrides() {
         if (t.fr) g_overrides["fr"][t.key] = t.fr;
         if (t.it) g_overrides["it"][t.key] = t.it;
     }
+    static const struct { const char* key; const wchar_t* text; } russian[] = {
+#include "i18n_ru.inc"
+    };
+    for (const auto& t : russian) g_overrides["ru"][t.key] = t.text;
 }
 
 std::wstring langUtf8ToWide(const std::string& s);
@@ -1500,6 +1515,7 @@ std::string normalizeLanguageId(std::string id) {
     }
     if (id == "ja-jp") return "ja";
     if (id == "ko-kr") return "ko";
+    if (id.rfind("ru-", 0) == 0) return "ru";
     return id;
 }
 
@@ -1559,7 +1575,7 @@ void loadLanguageOverrides() {
     g_langs.clear();   // rebuild: compiled + seeded roster, then ini extras
     g_overrides.clear();
     ensureBaseLanguages();
-    seedBuiltinOverrides();  // de/fr/it ship built-in; ini values override
+    seedBuiltinOverrides();  // de/fr/it/ru ship built-in; ini values override
 
     std::wstring path = languagesIniPath();
     if (path.empty()) return;
@@ -1608,7 +1624,7 @@ void openLanguagesIniFile() {
         f << "; the language appears in Settings once it has translations.\n";
         f << "; name= sets the label shown in the language dropdown.\n";
         f << "; Values override the built-in strings \xe2\x80\x94 including the shipped\n";
-        f << "; de/fr/it translations, so corrections work per-key; missing keys\n";
+        f << "; de/fr/it/ru translations, so corrections work per-key; missing keys\n";
         f << "; fall back to English.\n";
         for (const SeedLanguage& lang : kSeedLanguages) {
             f << "\n[" << lang.id << "]\n";

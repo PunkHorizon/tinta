@@ -313,6 +313,7 @@ int runUiFontTests() {
     interfaceFont(app, fonts.Get(), "ja", shared, L"Yu Gothic UI");
     interfaceFont(app, fonts.Get(), "ko", shared, L"Malgun Gothic");
     systemFallback(app, "de");
+    systemFallback(app, "ru");
     check(app.fontFallback == documentFallback &&
               fontsOf(app, fonts.Get(), app.textFormat, hanzi, app.fontFallback) == documentFont,
           "switching the interface language leaves documents alone");

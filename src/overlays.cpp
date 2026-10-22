@@ -2571,9 +2571,8 @@ void settingsChip(App& app, float& x, float y, const wchar_t* label, bool active
 
 D2D1_RECT_F settingsPanelRect(const App& app) {
     float w = std::min(dpi(app, app.settingsSection == 3 ? 980.0f : 760.0f), app.width - dpi(app, app.settingsSection == 3 ? 32.0f : 80.0f));
-    // Editor holds seven rows since PlantUML joined Pandoc: taller, so the
-    // last one stays clear of the footer
-    const float tall = app.settingsSection == 3 ? 650.0f : app.settingsSection == 2 ? 590.0f : 540.0f;
+    // Leave room for the last row and localized footer in every section.
+    const float tall = app.settingsSection == 3 ? 650.0f : 590.0f;
     float h = std::min(dpi(app, tall), app.height - dpi(app, 64.0f));
     float x = (app.width - w) / 2;
     float y = (app.height - h) / 2 + (1 - app.settingsAnimation) * dpi(app, 30.0f);
@@ -2895,12 +2894,10 @@ void renderSettingsOverlay(App& app) {
         cy += rowCardH + cardGap;
         // One card for the three hand-editable ini files (was three rows)
         card(rowCardH);
-        float filesW = chipsWidth({L"settings.ini", L"themes.ini", L"languages.ini"});
-        cardLabel(tr(app, "settings.config_files"), tr(app, "settings.config_files.hint"),
-                  filesW + dpi(app, 10.0f));
+        cardLabel(tr(app, "settings.config_files"), nullptr);
         {
-            float bx = cx + cw - cardPad - filesW;
-            float chipY = cy + (rowCardH - dpi(app, 24.0f)) * 0.5f;
+            float bx = cx + cardPad;
+            float chipY = cy + dpi(app, 28.0f);
             settingsChip(app, bx, chipY, L"settings.ini", false, SET_OPEN_INI, anim, fmt);
             settingsChip(app, bx, chipY, L"themes.ini", false, SET_OPEN_THEMES_INI, anim, fmt);
             settingsChip(app, bx, chipY, L"languages.ini", false, SET_OPEN_LANGS_INI, anim, fmt);

@@ -1,0 +1,11 @@
+if(NOT DEFINED TEST_BINARY OR NOT DEFINED TEST_DIR)
+    message(FATAL_ERROR "TEST_BINARY and TEST_DIR are required")
+endif()
+file(MAKE_DIRECTORY "${TEST_DIR}")
+configure_file("${TEST_BINARY}" "${TEST_DIR}/russian_ui_tests.exe" COPYONLY)
+file(WRITE "${TEST_DIR}/settings.ini" "; Isolated Russian UI test configuration\n")
+execute_process(COMMAND "${TEST_DIR}/russian_ui_tests.exe"
+    WORKING_DIRECTORY "${TEST_DIR}" RESULT_VARIABLE result)
+if(NOT result EQUAL 0)
+    message(FATAL_ERROR "Russian UI test failed: ${result}")
+endif()
