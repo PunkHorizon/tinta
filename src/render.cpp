@@ -605,10 +605,14 @@ static void layoutInlineContent(App& app, const std::vector<ElementPtr>& element
                     y += lineHeight;
                 }
 
-                app.layoutRects.push_back({D2D1::RectF(x - 2, y + mathTextOffset,
-                                                      x + textWidth + kCodeSpanPadding,
-                                                      y + mathTextOffset + normalLineHeight),
-                                           app.theme.codeBackground});
+                // The span keeps its padding without a background (#278)
+                const D2D1_COLOR_F codeBox = themeInlineCodeBackground(app.theme);
+                if (codeBox.a > 0.0f) {
+                    app.layoutRects.push_back({D2D1::RectF(x - 2, y + mathTextOffset,
+                                                          x + textWidth + kCodeSpanPadding,
+                                                          y + mathTextOffset + normalLineHeight),
+                                               codeBox});
+                }
 
                 // The run's own baseline counts any fallback font it uses
                 float codeTop = drawYOffset + baselineOf(textFormat) -
@@ -875,10 +879,13 @@ static void layoutInlineContent(App& app, const std::vector<ElementPtr>& element
             }
             float segWidth = widthOf(segStart, segEnd);
             if (wrappedCode) {
-                app.layoutRects.push_back({
-                    D2D1::RectF(segX - 2, y + mathTextOffset, segX + segWidth + kCodeSpanPadding,
-                                y + mathTextOffset + normalLineHeight),
-                    app.theme.codeBackground});
+                const D2D1_COLOR_F codeBox = themeInlineCodeBackground(app.theme);
+                if (codeBox.a > 0.0f) {
+                    app.layoutRects.push_back({
+                        D2D1::RectF(segX - 2, y + mathTextOffset, segX + segWidth + kCodeSpanPadding,
+                                    y + mathTextOffset + normalLineHeight),
+                        codeBox});
+                }
             } else if (hasBg) {
                 app.layoutRects.push_back({
                     D2D1::RectF(segX - 2, y + mathTextOffset + 1, segX + segWidth + 2,

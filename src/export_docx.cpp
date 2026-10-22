@@ -614,6 +614,8 @@ struct DocxCtx {
     std::string headingColors[6], highlightBgHex, highlightTextHex;
     std::string accentHex, linkHex, quoteBorderHex;
     std::string inlineCodeHex;  // explicit override; legacy paper colors otherwise
+    // Shading behind inline code; empty when the theme asks for none (#278)
+    std::string inlineCodeBgHex;
     std::string bodyFont, monoFont;
 
     // PlantUML export state: the cumulative wall-clock budget for sync
@@ -675,8 +677,8 @@ std::string runPropsXml(const DocxCtx& ctx, const RunProps& props) {
     if (props.underline) xml += "<w:u w:val=\"single\"/>";
     if (props.highlight && !ctx.highlightBgHex.empty())
         xml += "<w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"" + ctx.highlightBgHex + "\"/>";
-    else if (props.code)
-        xml += "<w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"" + ctx.codeBgHex + "\"/>";
+    else if (props.code && !ctx.inlineCodeBgHex.empty())
+        xml += "<w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"" + ctx.inlineCodeBgHex + "\"/>";
     if (props.superScript) xml += "<w:vertAlign w:val=\"superscript\"/>";
     else if (props.subScript) xml += "<w:vertAlign w:val=\"subscript\"/>";
     return xml.empty() ? "" : "<w:rPr>" + xml + "</w:rPr>";
@@ -1570,6 +1572,13 @@ bool exportDocxFile(App& app, const std::wstring& path) {
     ctx.mutedHex = dark ? "555555" : hexOver(muted, theme.background);
     ctx.codeBgHex = dark ? "F2F0EE" : hex6(theme.codeBackground);
     if (theme.inlineCode) ctx.inlineCodeHex = hex6(*theme.inlineCode);
+    // A dark theme's own colours would sit on white paper, so as for code
+    // blocks an explicit inline colour gives way to the light paper shade
+    ctx.inlineCodeBgHex = ctx.codeBgHex;
+    if (theme.inlineCodeBackground) {
+        ctx.inlineCodeBgHex = theme.inlineCodeBackground->a <= 0.0f ? std::string()
+                              : dark ? "F2F0EE" : hex6(*theme.inlineCodeBackground);
+    }
     D2D1_COLOR_F border = theme.text;
     border.a = 0.25f;
     ctx.borderHex = dark ? "C8C8C8" : hexOver(border, theme.background);

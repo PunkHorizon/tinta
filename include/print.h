@@ -39,6 +39,8 @@ void printPreviewSetFormat(App& app, int paper, bool landscape);
 // Lays the open preview out again: an image or a PlantUML diagram that
 // finished while it was open takes its place in the pages (no-op when closed)
 void printPreviewRefresh(App& app);
+// The print palette: a white page in the screen theme's faces
+D2DTheme printTheme(const D2DTheme& screen);
 
 // Page margins the preview offers, in mm: 0.5, 0.75 (the default) and 1 in.
 // settings.ini's printMarginMm takes any value from 5 to 50 (#257).

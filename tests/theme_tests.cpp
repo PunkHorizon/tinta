@@ -2,6 +2,7 @@
 #include "export.h"
 #include "input.h"
 #include "overlays.h"
+#include "print.h"
 #include "render.h"
 #include "settings.h"
 #include "syntax.h"
@@ -15,6 +16,7 @@
 #include <memory>
 
 int testThemeColours(App& app, const std::filesystem::path& dir);
+
 
 namespace {
 int failures = 0;
@@ -205,6 +207,131 @@ void themeEditorFontsApply(App& app, const std::string& source) {
     }
 }
 
+std::string cssHex(const D2D1_COLOR_F& c) {
+    char buf[8];
+    snprintf(buf, sizeof buf, "#%02x%02x%02x", (int)std::lround(c.r * 255), (int)std::lround(c.g * 255),
+             (int)std::lround(c.b * 255));
+    return buf;
+}
+
+std::string docxRun(const std::string& zip, const std::string& marker);
+
+// #278: inlinecodebackground= gives inline code its own box, or none,
+// while fenced code keeps codebackground
+void inlineCodeBackground(const std::filesystem::path& dir) {
+    namespace fs = std::filesystem;
+    const fs::path fixture = TINTA_INLINE_BG_FIXTURE;
+    { std::ofstream out(dir / "themes.ini", std::ios::binary);
+      out << read(fixture.parent_path() / "inline-code-background-themes.ini"); }
+    loadCustomThemes();
+    auto indexOf = [](const wchar_t* name) {
+        for (int i = 0; i < themeCount(); ++i)
+            if (themeAt(i).name && std::wstring(themeAt(i).name) == name) return i;
+        return -1;
+    };
+    const int inherit = indexOf(L"Inline inherit"), none = indexOf(L"Inline none"),
+              tinted = indexOf(L"Inline tinted");
+    check(inherit >= 0 && none >= 0 && tinted >= 0, "the three inline background themes load");
+    if (inherit < 0 || none < 0 || tinted < 0) return;
+    check(!themeAt(inherit).inlineCodeBackground, "a theme without the key inherits codebackground");
+    check(themeAt(none).inlineCodeBackground && themeAt(none).inlineCodeBackground->a == 0.0f,
+          "inlinecodebackground=none loads as no box");
+    check(themeAt(tinted).inlineCodeBackground &&
+              sameColor(*themeAt(tinted).inlineCodeBackground, hexColor(0x45475A)),
+          "an inline background colour loads");
+
+    auto state = std::make_unique<App>();
+    App& app = *state;
+    if (!initD2D(app)) { check(false, "D2D initializes"); return; }
+    app.height = 900;
+    app.readingWidthPct = 100;
+    const std::string source = read(fixture);
+    const std::wstring markers[] = {L"inline_heading", L"inline_one", L"inline_two", L"inline_bold",
+                                    L"inline_list", L"inline_quote", L"inline_wrap"};
+    for (int index : {inherit, none, tinted}) {
+        applyTheme(app, index);
+        // What each fixture theme asks for, independent of the code under test
+        const D2D1_COLOR_F block = app.theme.codeBackground;
+        const D2D1_COLOR_F box = index == none     ? D2D1::ColorF(0, 0, 0, 0)
+                                 : index == tinted ? hexColor(0x45475A)
+                                                   : block;
+        for (int width : {1050, 650}) {
+            app.width = width;
+            app.root = app.parser.parse(source).root;
+            layoutDocument(app);
+            // The rects drawn under a laid-out run, by colour
+            auto under = [&](const std::wstring& marker, const D2D1_COLOR_F& color) {
+                int found = -1;
+                for (const auto& run : app.layoutTextRuns) {
+                    if (!run.docLength) continue;
+                    if (app.docText.compare(run.docStart, marker.size(), marker) != 0) continue;
+                    const float x = run.bounds.left + 2.0f;
+                    const float y = (run.bounds.top + run.bounds.bottom) * 0.5f;
+                    found = 0;
+                    for (const auto& rect : app.layoutRects)
+                        if (x >= rect.rect.left && x <= rect.rect.right && y >= rect.rect.top &&
+                            y <= rect.rect.bottom && sameColor(rect.color, color)) {
+                            found++;
+                        }
+                    break;
+                }
+                return found;
+            };
+            for (const auto& marker : markers) {
+                if (box.a > 0.0f) {
+                    check(under(marker, box) >= 1, "inline code sits on its theme's inline box");
+                } else {
+                    check(under(marker, block) == 0, "with none, inline code has no box behind it");
+                }
+            }
+            check(under(L"block_plain", block) >= 1, "fenced code keeps codebackground");
+
+            check(exportHtmlFile(app, (dir / "inline-bg.html").wstring()), "HTML export succeeds");
+            const std::string html = read(dir / "inline-bg.html");
+            const size_t rule = html.find("code{font-family:");
+            const std::string inlineRule =
+                rule == std::string::npos ? "" : html.substr(rule, html.find('}', rule) - rule);
+            check(inlineRule.find("background:" + (box.a > 0.0f ? cssHex(box) : std::string("none")) + ";") !=
+                      std::string::npos,
+                  "the HTML export's inline code rule follows the theme");
+            check(html.find("pre{background:" + cssHex(block)) != std::string::npos,
+                  "the HTML export's code blocks keep codebackground");
+
+            check(exportDocxFile(app, (dir / "inline-bg.docx").wstring()), "Word export succeeds");
+            const std::string zip = read(dir / "inline-bg.docx");
+            const std::string run = docxRun(zip, "inline_one");
+            check(!run.empty(), "the Word export holds the inline span");
+            if (box.a > 0.0f) {
+                const std::string fill = app.theme.isDark ? "F2F0EE" : cssHex(box).substr(1);
+                std::string upper = fill;
+                for (char& c : upper) c = (char)toupper((unsigned char)c);
+                check(run.find("w:fill=\"" + upper + "\"") != std::string::npos,
+                      "the Word export shades inline code with its inline colour");
+            } else {
+                check(run.find("<w:shd") == std::string::npos, "with none, the Word export leaves inline code unshaded");
+            }
+        }
+    }
+    check(printTheme(themeAt(none)).inlineCodeBackground &&
+              printTheme(themeAt(none)).inlineCodeBackground->a == 0.0f,
+          "printing keeps inline code without a box");
+    check(!printTheme(themeAt(tinted)).inlineCodeBackground,
+          "printing gives a coloured inline box the paper's code shade");
+
+    // themes.ini keeps the key through a save from the editor
+    const D2DTheme saveNone = themeAt(none), saveTinted = themeAt(tinted);
+    saveCustomTheme(saveNone, L"Saved none", saveNone.fontFamily, saveNone.codeFontFamily);
+    saveCustomTheme(saveTinted, L"Saved tinted", saveTinted.fontFamily, saveTinted.codeFontFamily);
+    const std::string ini = read(dir / "themes.ini");
+    check(ini.find("inlinecodebackground=none") != std::string::npos &&
+              ini.find("inlinecodebackground=45475A") != std::string::npos,
+          "themes.ini writes inlinecodebackground");
+    loadCustomThemes();
+    check(indexOf(L"Saved none") >= 0 && themeAt(indexOf(L"Saved none")).inlineCodeBackground &&
+              themeAt(indexOf(L"Saved none")).inlineCodeBackground->a == 0.0f,
+          "a saved none survives reloading themes.ini");
+}
+
 std::string docxRun(const std::string& zip, const std::string& marker) {
     // Tinta writes stored ZIP entries, so the actual XML can be inspected
     // here without introducing a ZIP dependency into the native tests.
@@ -331,6 +458,7 @@ int main(int argc, char** argv) {
         themeEditorFontsApply(app, read(TINTA_THEME_FONTS_FIXTURE));
     }
     themeEditorFonts(dir);
+    inlineCodeBackground(dir);  // last: it rewrites themes.ini
     CoUninitialize();
     std::cout << "Inline code themes: " << failures << " failures\n";
     return failures ? 1 : 0;

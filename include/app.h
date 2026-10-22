@@ -118,6 +118,9 @@ struct D2DTheme {
     D2D1_COLOR_F syntaxControlFlow;
     // Optional themes.ini override. Missing means inherit code (#197).
     std::optional<D2D1_COLOR_F> inlineCode = std::nullopt;
+    // Optional inline-code background (#278): missing inherits
+    // codeBackground; "none" is stored as a fully transparent colour
+    std::optional<D2D1_COLOR_F> inlineCodeBackground = std::nullopt;
     std::optional<D2D1_COLOR_F> headingColors[6]{};
     std::optional<D2D1_COLOR_F> highlightBackground = std::nullopt;
     std::optional<D2D1_COLOR_F> highlightText = std::nullopt;
@@ -125,6 +128,11 @@ struct D2DTheme {
 
 inline D2D1_COLOR_F themeInlineCodeColor(const D2DTheme& theme) {
     return theme.inlineCode.value_or(theme.code);
+}
+
+// The box behind inline code; alpha 0 means the theme asked for none
+inline D2D1_COLOR_F themeInlineCodeBackground(const D2DTheme& theme) {
+    return theme.inlineCodeBackground.value_or(theme.codeBackground);
 }
 
 inline D2D1_COLOR_F themeHeadingColor(const D2DTheme& theme, int level) {

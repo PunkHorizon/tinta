@@ -1501,8 +1501,12 @@ std::string themeCss(const App& app, const std::string& bodyFont,
     css += "a{color:" + colorCss(t.link) + ";}";
     css += ".wikilink{color:" + colorCss(t.link) +
            ";border-bottom:1px dashed " + colorCss(t.link) + ";}";
+    // Inline code may drop its box (inlinecodebackground=none, #278); code
+    // blocks keep codebackground through pre below
+    const D2D1_COLOR_F inlineBox = themeInlineCodeBackground(t);
     css += "code{font-family:" + monoFont + ";background:" +
-           colorCss(t.codeBackground) + ";color:" + colorCss(themeInlineCodeColor(t)) +
+           (inlineBox.a > 0.0f ? colorCss(inlineBox) : std::string("none")) +
+           ";color:" + colorCss(themeInlineCodeColor(t)) +
            ";padding:2px 6px;border-radius:4px;font-size:0.9em;}";
     css += "pre{background:" + colorCss(t.codeBackground) +
            ";padding:14px 16px;border-radius:8px;overflow-x:auto;}";

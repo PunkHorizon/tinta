@@ -30,14 +30,6 @@
 // "Microsoft Print to PDF" and the OS produces the PDF, with font
 // embedding (including CJK) handled by the driver.
 
-namespace {
-
-// Page margins on every side (#257): the preview's choice, kept in
-// settings.ini, 0.75 in unless changed
-float printMarginDips(const App& app) {
-    return app.printMarginMm * 96.0f / 25.4f;
-}
-
 // Paper-derived palette with a true white page, set in the screen theme's
 // own body, heading and code faces (#258)
 D2DTheme printTheme(const D2DTheme& screen) {
@@ -47,7 +39,18 @@ D2DTheme printTheme(const D2DTheme& screen) {
     t.codeFontFamily = screen.codeFontFamily;
     t.background = D2D1::ColorF(1.0f, 1.0f, 1.0f);
     t.codeBackground = hexColor(0xF4F4F4);
+    // Inline code without a box stays without one on paper (#278)
+    if (screen.inlineCodeBackground && screen.inlineCodeBackground->a <= 0.0f)
+        t.inlineCodeBackground = screen.inlineCodeBackground;
     return t;
+}
+
+namespace {
+
+// Page margins on every side (#257): the preview's choice, kept in
+// settings.ini, 0.75 in unless changed
+float printMarginDips(const App& app) {
+    return app.printMarginMm * 96.0f / 25.4f;
 }
 
 using SavedView = App::PrintSavedView;

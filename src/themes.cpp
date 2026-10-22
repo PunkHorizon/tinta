@@ -333,6 +333,14 @@ void applyThemeKey(CustomTheme& ct, const std::string& key, const std::string& v
         if (parseHexColor(value, color)) t.inlineCode = color;
     }
     else if (key == "codebackground") parseHexColor(value, t.codeBackground);
+    else if (key == "inlinecodebackground") {
+        // A colour, or none/transparent for inline code without a box (#278)
+        std::string word = value;
+        for (char& c : word) c = (char)tolower((unsigned char)c);
+        D2D1_COLOR_F color;
+        if (word == "none" || word == "transparent") t.inlineCodeBackground = D2D1::ColorF(0, 0, 0, 0);
+        else if (parseHexColor(value, color)) t.inlineCodeBackground = color;
+    }
     else if (key == "blockquoteborder") parseHexColor(value, t.blockquoteBorder);
     else if (key == "accent") parseHexColor(value, t.accent);
     else if (key == "syntaxkeyword") parseHexColor(value, t.syntaxKeyword);
@@ -352,6 +360,8 @@ void writeThemesIni() {
     file << "; User themes. Colors are RRGGBB hex. Restart not required for\n";
     file << "; themes saved from the editor; hand edits load at next launch.\n";
     file << "; Optional inlinecode overrides code for inline spans only.\n";
+    file << "; Optional inlinecodebackground (a colour, or none) overrides\n";
+    file << "; codebackground for inline spans only.\n";
     file << "; An empty headingfont= sets headings in font=.\n";
     for (const auto& ct : g_customThemes) {
         const D2DTheme& t = ct->theme;
@@ -374,6 +384,12 @@ void writeThemesIni() {
         file << "code=" << colorToHex(t.code) << "\n";
         if (t.inlineCode) file << "inlinecode=" << colorToHex(*t.inlineCode) << "\n";
         file << "codebackground=" << colorToHex(t.codeBackground) << "\n";
+        if (t.inlineCodeBackground) {
+            file << "inlinecodebackground="
+                 << (t.inlineCodeBackground->a <= 0.0f ? std::string("none")
+                                                       : colorToHex(*t.inlineCodeBackground))
+                 << "\n";
+        }
         file << "blockquoteborder=" << colorToHex(t.blockquoteBorder) << "\n";
         file << "accent=" << colorToHex(t.accent) << "\n";
         file << "syntaxkeyword=" << colorToHex(t.syntaxKeyword) << "\n";
@@ -403,6 +419,7 @@ const char* themesIniTemplate() {
            "; link=2B6CB0\n"
            "; code=285E61              (inlinecode= for inline spans only)\n"
            "; codebackground=EBF8FF\n"
+           "; inlinecodebackground=none  (inline spans only; or RRGGBB)\n"
            "; blockquoteborder=A0C4E8\n"
            "; accent=2B6CB0\n"
            "; highlightbackground=FEF3C7\n"
