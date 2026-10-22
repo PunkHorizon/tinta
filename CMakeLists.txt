@@ -302,6 +302,13 @@ if(BUILD_TESTING)
         TINTA_FOOTNOTE_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/footnotes.md")
     add_test(NAME footnotes COMMAND footnote_tests)
 
+    add_executable(script_span_tests tests/script_span_tests.cpp ${INPUT_TEST_SOURCES})
+    target_include_directories(script_span_tests PRIVATE include ${md4c_SOURCE_DIR}/src)
+    target_link_libraries(script_span_tests PRIVATE $<TARGET_PROPERTY:tinta,LINK_LIBRARIES>)
+    target_compile_definitions(script_span_tests PRIVATE $<TARGET_PROPERTY:tinta,COMPILE_DEFINITIONS>
+        TINTA_TILDE_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/tilde-ranges-277.md")
+    add_test(NAME tilde_ranges COMMAND script_span_tests)
+
     add_executable(html_span_tests tests/html_span_tests.cpp ${INPUT_TEST_SOURCES})
     target_include_directories(html_span_tests PRIVATE include ${md4c_SOURCE_DIR}/src)
     target_link_libraries(html_span_tests PRIVATE $<TARGET_PROPERTY:tinta,LINK_LIBRARIES>)

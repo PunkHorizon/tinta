@@ -721,6 +721,45 @@ struct ExtensionMatch {
     ElementType type;
 };
 
+// The code point starting at byte i of UTF-8 text (0 at either end)
+static uint32_t codePointAt(const std::string& text, size_t i) {
+    if (i >= text.size()) return 0;
+    const unsigned char lead = static_cast<unsigned char>(text[i]);
+    const int extra = lead >= 0xF0 ? 3 : lead >= 0xE0 ? 2 : lead >= 0xC0 ? 1 : 0;
+    uint32_t c = extra == 3 ? lead & 0x07 : extra == 2 ? lead & 0x0F : extra == 1 ? lead & 0x1F : lead;
+    for (int k = 1; k <= extra && i + k < text.size(); k++) {
+        c = (c << 6) | (static_cast<unsigned char>(text[i + k]) & 0x3F);
+    }
+    return c;
+}
+
+static uint32_t codePointBefore(const std::string& text, size_t i) {
+    if (i == 0) return 0;
+    size_t j = i - 1;
+    while (j > 0 && (static_cast<unsigned char>(text[j]) & 0xC0) == 0x80) j--;
+    return codePointAt(text, j);
+}
+
+// A digit, or a Chinese, Japanese or Korean letter
+static bool rangeEnd(uint32_t c) {
+    return (c >= '0' && c <= '9') ||
+           (c >= 0x3040 && c <= 0x30FF) ||    // kana
+           (c >= 0x3400 && c <= 0x4DBF) ||    // CJK extension A
+           (c >= 0x4E00 && c <= 0x9FFF) ||    // CJK unified ideographs
+           (c >= 0xAC00 && c <= 0xD7AF) ||    // Hangul syllables
+           (c >= 0xF900 && c <= 0xFAFF) ||    // CJK compatibility ideographs
+           (c >= 0x20000 && c <= 0x2FA1F);    // CJK extensions B-F
+}
+
+// A single tilde between two digits or two CJK letters writes a range, as
+// Chinese, Japanese and Korean text does (50~100mm, 周一~周五): it neither
+// opens nor closes a ~subscript~, or two ranges in a paragraph turned the
+// text between them into one (#277). H~2~O has a Latin letter beside each
+// tilde and stays a subscript.
+static bool isRangeTilde(const std::string& text, size_t i) {
+    return rangeEnd(codePointBefore(text, i)) && rangeEnd(codePointAt(text, i + 1));
+}
+
 // Find the first extension span at or after `from`. Delimiters are ASCII,
 // so byte scanning is UTF-8 safe.
 static bool findExtensionSpan(const std::string& text, size_t from, ExtensionMatch& match) {
@@ -745,7 +784,11 @@ static bool findExtensionSpan(const std::string& text, size_t from, ExtensionMat
             continue;
         } else if (c == '^' || c == '~') {
             if (c == '^' && i && text[i - 1] == '[') continue;
+            if (c == '~' && isRangeTilde(text, i)) continue;
             size_t close = text.find(c, i + 1);
+            while (c == '~' && close != std::string::npos && isRangeTilde(text, close)) {
+                close = text.find(c, close + 1);
+            }
             if (close == std::string::npos || close == i + 1) continue;
             // Typora rule: no whitespace inside sup/sub spans
             bool hasSpace = false;
