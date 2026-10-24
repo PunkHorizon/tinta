@@ -22,6 +22,12 @@ bool openDocumentInViewer(App& app, const std::wstring& fullPath);
 // Same document setup for a tab's cached source when its file disappeared.
 bool openDocumentSourceInViewer(App& app, const std::wstring& fullPath,
                                 const std::string& source);
+// Reading position memory (#77): the place the document is read at, which
+// is its saved place while the layout has not reached that yet
+float readingPlace(const App& app);
+// Saves the current document's place as the view leaves it, for another
+// file or for a note, the start page or an untitled tab (#279)
+void persistLeavingPosition(App& app);
 // Mouse XBUTTON / Alt+arrow navigation across link jumps (viewer)
 void navigateBack(App& app, HWND hwnd);
 void navigateForward(App& app, HWND hwnd);

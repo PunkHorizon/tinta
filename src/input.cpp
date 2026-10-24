@@ -258,6 +258,17 @@ bool openDocumentInViewer(App& app, const std::wstring& fullPath) {
     return openDocumentSourceInViewer(app, fullPath, buffer.str());
 }
 
+float readingPlace(const App& app) {
+    // A quick run through the tabs leaves before the layout gets there
+    return app.pendingScrollRestore >= 0.0f ? app.pendingScrollRestore : app.scrollY;
+}
+
+void persistLeavingPosition(App& app) {
+    if (app.currentFile.empty()) return;
+    persistReadingPosition(app.currentFile, readingPlace(app), app.zoomFactor);
+    app.pendingScrollRestore = -1.0f;  // it belonged to the document left
+}
+
 bool openDocumentSourceInViewer(App& app, const std::wstring& fullPath,
                                 const std::string& source) {
     auto result = parseDocument(app.parser, source, fullPath);
@@ -274,9 +285,7 @@ bool openDocumentSourceInViewer(App& app, const std::wstring& fullPath,
 
     // Reading position memory (#77): keep the old document's position,
     // resume the new one's
-    if (!app.currentFile.empty()) {
-        persistReadingPosition(app.currentFile, app.scrollY, app.zoomFactor);
-    }
+    persistLeavingPosition(app);
 
     app.root = result.root;
     app.parseTimeUs = result.parseTimeUs;

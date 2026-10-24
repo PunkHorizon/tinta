@@ -1,21 +1,19 @@
 // #276: Ctrl+G goes to a line, in the editor and in the reading view
 #include "d2d_init.h"
 #include "editor.h"
+#include "frame_preview.h"
 #include "input.h"
 #include "render.h"
 #include "settings.h"
-#include "tabs.h"
 #include "utils.h"
 
 #include <algorithm>
 #include <cmath>
-#include <d2d1_1.h>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
 #include <string>
-#include <wrl/client.h>
 
 namespace {
 int failures = 0;
@@ -49,72 +47,10 @@ void paint(App& app) {
     check(SUCCEEDED(app.renderTarget->EndDraw()), "the view and the prompt paint");
 }
 
-// One frame as drawn, the tab strip, the pane and the prompt, saved beside
-// the test for inspection: the window target's device context draws into
-// a bitmap for it, which is copied to the CPU
+// One frame with the prompt over it, saved beside the test for inspection
 void savePreview(App& app, const std::string& name) {
-    using Microsoft::WRL::ComPtr;
-    ComPtr<ID2D1DeviceContext> dc;
-    if (FAILED(app.renderTarget->QueryInterface(IID_PPV_ARGS(&dc)))) return check(false, "a preview draws");
-    const UINT width = (UINT)app.width, height = (UINT)app.height;
-    const auto format = D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED);
-    ComPtr<ID2D1Bitmap1> target, readable;
-    if (FAILED(dc->CreateBitmap(D2D1::SizeU(width, height), nullptr, 0,
-            D2D1::BitmapProperties1(D2D1_BITMAP_OPTIONS_TARGET, format), &target)) ||
-        FAILED(dc->CreateBitmap(D2D1::SizeU(width, height), nullptr, 0,
-            D2D1::BitmapProperties1(D2D1_BITMAP_OPTIONS_CPU_READ | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
-                                    format), &readable))) {
-        return check(false, "a preview draws");
-    }
-    ComPtr<ID2D1Image> previous;
-    dc->GetTarget(&previous);
-    dc->SetTarget(target.Get());
-    dc->BeginDraw();
-    if (app.editMode && !app.editorReadingPreview) {
-        dc->Clear(editDeskColor(app));
-        renderEditor(app, editorPaneWidth(app));
-    } else {
-        // The reading view's retained layout, scrolled
-        dc->Clear(app.theme.background);
-        dc->SetTransform(D2D1::Matrix3x2F::Translation(documentViewportX(app) - app.scrollX, -app.scrollY));
-        for (const auto& item : app.layoutRects) {
-            app.brush->SetColor(item.color);
-            dc->FillRectangle(item.rect, app.brush);
-        }
-        for (const auto& item : app.layoutLines) {
-            app.brush->SetColor(item.color);
-            dc->DrawLine(item.p1, item.p2, app.brush, item.stroke);
-        }
-        for (const auto& item : app.layoutTextRuns) {
-            app.brush->SetColor(item.color);
-            dc->DrawTextLayout(item.pos, item.layout, app.brush);
-        }
-        dc->SetTransform(D2D1::Matrix3x2F::Identity());
-    }
-    renderTabStrip(app);
-    renderGotoLinePrompt(app);
-    const bool drawn = SUCCEEDED(dc->EndDraw());
-    dc->SetTarget(previous.Get());
-    D2D1_MAPPED_RECT mapped{};
-    if (!drawn || FAILED(readable->CopyFromBitmap(nullptr, target.Get(), nullptr)) ||
-        FAILED(readable->Map(D2D1_MAP_OPTIONS_READ, &mapped))) {
-        return check(false, "a preview draws");
-    }
-    ComPtr<IWICBitmap> image;
-    const bool copied = SUCCEEDED(app.wicFactory->CreateBitmapFromMemory(
-        width, height, GUID_WICPixelFormat32bppPBGRA, mapped.pitch, mapped.pitch * height, mapped.bits, &image));
-    readable->Unmap();
-    const std::filesystem::path path = std::filesystem::current_path() / (name + ".png");
-    ComPtr<IWICStream> stream;
-    ComPtr<IWICBitmapEncoder> encoder;
-    ComPtr<IWICBitmapFrameEncode> frame;
-    check(copied && SUCCEEDED(app.wicFactory->CreateStream(&stream)) &&
-          SUCCEEDED(stream->InitializeFromFilename(path.c_str(), GENERIC_WRITE)) &&
-          SUCCEEDED(app.wicFactory->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder)) &&
-          SUCCEEDED(encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache)) &&
-          SUCCEEDED(encoder->CreateNewFrame(&frame, nullptr)) && SUCCEEDED(frame->Initialize(nullptr)) &&
-          SUCCEEDED(frame->WriteSource(image.Get(), nullptr)) && SUCCEEDED(frame->Commit()) &&
-          SUCCEEDED(encoder->Commit()),
+    check(saveFramePreview(app, std::filesystem::current_path() / (name + ".png"),
+                           [&] { renderGotoLinePrompt(app); }),
           "a preview is saved");
 }
 

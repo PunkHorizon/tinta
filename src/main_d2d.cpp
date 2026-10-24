@@ -1842,7 +1842,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 settings.keyOverrides = app->keyOverrides;
                 if (!app->currentFile.empty()) {
                     rememberReadingPosition(settings, app->currentFile,
-                                            app->scrollY, app->zoomFactor);
+                                            readingPlace(*app), app->zoomFactor);
                 }
 
                 // Get window placement for position/size/maximized state

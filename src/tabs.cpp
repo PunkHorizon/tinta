@@ -198,7 +198,9 @@ void tabActivate(App& app, HWND hwnd, int index) {
                           INVALID_FILE_ATTRIBUTES;
     } else {
         // Untitled note: swap in an empty document so the preview pane
-        // does not keep showing the previous tab's content
+        // does not keep showing the previous tab's content. No file opens
+        // to save the one being left's place on the way (#279).
+        persistLeavingPosition(app);
         app.currentFile.clear();
         app.sourceText.clear();
         auto result = parseDocument(app.parser, std::string(), app.currentFile);
@@ -351,6 +353,7 @@ void tabCycle(App& app, HWND hwnd, int direction) {
 void tabBecomeStartPage(App& app, HWND hwnd) {
     tabsInit(app);
     parkActiveEditBuffer(app);  // clean editor teardown if one was open
+    persistLeavingPosition(app);  // reopened later, it resumes there (#279)
     App::DocTab& tab = app.tabs[app.activeTab];
     draftsDeleteForTab(app, tab.id);
     tab.path.clear();
@@ -382,6 +385,7 @@ void tabOpenStartPage(App& app, HWND hwnd) {
     tabsInit(app);
     syncActiveTab(app);
     parkActiveEditBuffer(app);
+    persistLeavingPosition(app);  // the document's tab resumes there (#279)
     App::DocTab tab;
     tab.id = ++app.tabIdCounter;
     tab.title = L"Tinta";
@@ -409,6 +413,7 @@ void tabOpenQuickNote(App& app, HWND hwnd) {
     tabsInit(app);
     syncActiveTab(app);
     parkActiveEditBuffer(app);
+    persistLeavingPosition(app);  // the document's tab resumes there (#279)
     App::DocTab tab;
     tab.id = ++app.tabIdCounter;
     tab.title = tr(app, "title.untitled");
