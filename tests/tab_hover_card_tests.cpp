@@ -201,7 +201,7 @@ void wheelSwitchesTabs(App& app) {
     check(app.activeTab == 1, "the wheel over the document leaves the tabs alone");
     // A turn that closes the tab menu does only that
     app.mouseY = (int)(chromeTopHeight(app) * 0.5f);
-    openTabMenu(app, 1, app.mouseX, app.mouseY);
+    openTabMenu(app, 1, (float)app.mouseX, (float)app.mouseY);
     wheel(app, -WHEEL_DELTA);
     check(!app.showTabMenu && app.activeTab == 1, "a turn that closes the tab menu switches no tab");
 }
