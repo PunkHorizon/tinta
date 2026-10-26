@@ -1,6 +1,7 @@
 #include "d2d_init.h"
 #include "editor.h"
 #include "input.h"
+#include "keystroke.h"
 #include "overlays.h"
 #include "render.h"
 #include "search.h"
@@ -18,17 +19,10 @@ void check(bool value, const char* message) {
     if (!value) { std::cerr << "FAIL: " << message << '\n'; ++failures; }
 }
 void key(App& app, unsigned vk, unsigned ch = 0, bool control = false, bool shift = false) {
-    BYTE original[256], pressed[256];
-    GetKeyboardState(original);
-    memcpy(pressed, original, sizeof pressed);
-    pressed[VK_CONTROL] = control ? 0x80 : 0;
-    pressed[VK_SHIFT] = shift ? 0x80 : 0;
-    SetKeyboardState(pressed);
-    if (!handleKeyDown(app, app.hwnd, vk) && ch) handleCharInput(app, app.hwnd, ch);
-    SetKeyboardState(original);
+    keystroke(app, vk, {control, shift}, (wchar_t)ch);
 }
 void type(App& app, const std::wstring& text) {
-    for (wchar_t ch : text) handleCharInput(app, app.hwnd, ch);
+    typeKeys(app, text);
 }
 void click(App& app, float x, float y) {
     LPARAM pt = MAKELPARAM(static_cast<int>(x), static_cast<int>(y));

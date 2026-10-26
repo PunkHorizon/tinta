@@ -3,6 +3,7 @@
 #include "editor.h"
 #include "i18n.h"
 #include "input.h"
+#include "keystroke.h"
 #include "overlays.h"
 #include "print.h"
 #include "render.h"
@@ -41,7 +42,7 @@ void key(App& app, unsigned vk, bool control = false, bool shift = false) {
     SetKeyboardState(original);
 }
 void type(App& app, const std::wstring& text) {
-    for (wchar_t ch : text) handleCharInput(app, app.hwnd, ch);
+    typeKeys(app, text);
 }
 void click(App& app, float x, float y) {
     LPARAM pt = MAKELPARAM((int)x, (int)y);

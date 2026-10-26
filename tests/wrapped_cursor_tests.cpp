@@ -1,6 +1,7 @@
 #include "d2d_init.h"
 #include "editor.h"
 #include "input.h"
+#include "keystroke.h"
 #include "render.h"
 #include "search.h"
 #include "settings.h"
@@ -133,7 +134,7 @@ void edgeClicks(App& app) {
     check(app.editorCursorPos==0,"Up at BOF remains stable");
     key(app,VK_DOWN); size_t insert=app.editorCursorPos;
     auto before=app.editorText;
-    handleCharInput(app,app.hwnd,L'Q');
+    typeKeys(app,L"Q");
     check(app.editorText==before.substr(0,insert)+L"Q"+before.substr(insert),"typing inserts at the reached wrap boundary");
     key(app,'Z',false,true);
     check(app.editorText==before && app.editorCursorPos==insert,"Undo restores text and the insertion position");

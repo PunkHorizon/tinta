@@ -5,7 +5,7 @@
 // Characters handed over regardless of the key-down, or with no key-down
 // at all, hide a handler that consumes keys it should let through: Ctrl+G's
 // prompt swallowed every digit that way while its tests typed into it
-// (#282).
+// (#282). input_tests fails on a direct handleCharInput call elsewhere.
 #pragma once
 
 #include "app.h"

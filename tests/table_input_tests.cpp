@@ -1,6 +1,7 @@
 #include "d2d_init.h"
 #include "editor.h"
 #include "input.h"
+#include "keystroke.h"
 #include "render.h"
 #include "search.h"
 #include "settings.h"
@@ -17,13 +18,9 @@ namespace {
 int failures=0;
 void check(bool ok,const char* label) { if(!ok){++failures;std::cerr<<"FAIL table/modifiers: "<<label<<'\n';} }
 void key(App& app,unsigned vk,bool ctrl=false,bool shift=false,bool alt=false,unsigned ch=0) {
-    BYTE old[256],pressed[256];GetKeyboardState(old);memcpy(pressed,old,sizeof old);
-    pressed[VK_CONTROL]=ctrl?0x80:0;pressed[VK_SHIFT]=shift?0x80:0;pressed[VK_MENU]=alt?0x80:0;
-    SetKeyboardState(pressed);
-    if(!handleKeyDown(app,app.hwnd,vk) && ch)handleCharInput(app,app.hwnd,ch);
-    SetKeyboardState(old);
+    keystroke(app,vk,{ctrl,shift,alt},(wchar_t)ch);
 }
-void type(App& app,const std::wstring& text) { for(auto ch:text)handleCharInput(app,app.hwnd,ch); }
+void type(App& app,const std::wstring& text) { typeKeys(app,text); }
 void putClipboard(App& app,const std::wstring& text) {
     bool copied=false;
     for(int attempt=0;attempt<20 && !(copied=copyToClipboard(app.hwnd,text));++attempt) Sleep(5);
@@ -137,7 +134,9 @@ void reading(App& app,const std::wstring& source) {
     check(documentViewportX(app)==0 && editorPaneWidth(app)==0 && app.docText.find(L"UNSAVED")!=app.docText.npos,"full-width preview contains unsaved table text");
     std::ifstream disk(path,std::ios::binary);std::string bytes((std::istreambuf_iterator<char>(disk)),{});
     check(bytes==toUtf8(source),"reading preview leaves the file on disk unchanged");
-    type(app,L"must not insert");key(app,'V',true);check(app.editorText==edited,"reading view cannot edit an invisible source caret");
+    // Keys that are no shortcut here: their characters reach the reading view
+    // and must not edit the source it hides (E, T or S would act, as in the app)
+    type(app,L"cloudy");key(app,'V',true);check(app.editorText==edited,"reading view cannot edit an invisible source caret");
     key(app,'E',false,false,false,'e');
     check(!app.editorReadingPreview && app.editorText==edited && app.undoStack.size()==undo && app.editorCursorPos==caret,"return-to-edit key preserves text/caret/undo and does not insert e");
     key(app,'Z',true);check(app.editorText==source,"Undo works after a preview round trip");

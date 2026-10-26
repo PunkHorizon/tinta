@@ -1,8 +1,10 @@
 #include "input.h"
 #include "d2d_init.h"
+#include "keystroke.h"
 #include "overlays.h"
 #include "settings.h"
 
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
@@ -14,11 +16,32 @@ void check(bool value, const char* message) {
     if (!value) { std::cerr << "FAIL: " << message << '\n'; ++failures; }
 }
 
-// Same contract as the main message loop: a consumed key must not have
-// its layout-dependent WM_CHAR translated into the new editor/overlay.
+// A key with the character its layout types, or none: a consumed key must
+// not have its WM_CHAR translated into the new editor/overlay (keystroke.h)
 void stroke(App& app, unsigned vk, unsigned character = 0) {
-    bool consumed = handleKeyDown(app, app.hwnd, vk);
-    if (!consumed && character) handleCharInput(app, app.hwnd, character);
+    keystroke(app, vk, {}, (wchar_t)character);
+}
+
+// Every test types through keystroke.h (#282): a test that hands
+// characters to the handler itself can pass while the app drops them
+void testsTypeThroughKeystrokes() {
+    const std::string direct = std::string("handleCharInput") + "(";
+    int scanned = 0;
+    for (const auto& entry : std::filesystem::directory_iterator(std::filesystem::path(TINTA_SOURCE_DIR) / "tests")) {
+        const auto extension = entry.path().extension();
+        if ((extension != ".cpp" && extension != ".h") || entry.path().filename() == "keystroke.h") continue;
+        std::ifstream in(entry.path(), std::ios::binary);
+        std::stringstream text;
+        text << in.rdbuf();
+        ++scanned;
+        if (text.str().find(direct) != std::string::npos) {
+            std::cerr << "FAIL: tests/" << entry.path().filename().string()
+                      << " calls handleCharInput itself; type with keystroke.h, which delivers a character"
+                         " only when the key-down leaves it unconsumed, as the app's message loop does\n";
+            ++failures;
+        }
+    }
+    check(scanned >= 20, "the test sources are scanned for direct character input");
 }
 
 void settingsDismissal() {
@@ -204,6 +227,7 @@ int main(int argc, char** argv) {
     if (argc == 2 && std::string(argv[1]) == "--tab-hover-card-tests") return runTabHoverCardTests();
     if (argc == 2 && std::string(argv[1]) == "--search-panel-tests") return runSearchPanelTests();
     if (argc == 7 && std::string(argv[1]) == "--cascade") return runTabDropLaunchProbe();
+    testsTypeThroughKeystrokes();
     settingsDismissal();
     auto state = std::make_unique<App>();
     App& app = *state;

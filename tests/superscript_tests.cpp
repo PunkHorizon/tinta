@@ -2,6 +2,7 @@
 #include "editor.h"
 #include "i18n.h"
 #include "input.h"
+#include "keystroke.h"
 #include "render.h"
 #include "settings.h"
 #include "startpage.h"
@@ -205,8 +206,8 @@ void learnCopies(App& app, const std::filesystem::path& dir) {
             check(original.find(hint) != std::string::npos && original.find("{{EDIT_KEY}}") == std::string::npos,
                   "Learn edit hint matches Windows, Vim and custom keymaps");
             const auto key = app.keymap[KA_EDIT];
-            if (key.isChar) handleCharInput(app, app.hwnd, key.key);
-            else handleKeyDown(app, app.hwnd, key.key);
+            if (key.isChar) typeKeys(app, std::wstring(1, (wchar_t)key.key));
+            else keystroke(app, key.key);
             check(app.editMode && app.editorDirty && app.currentFile.empty() && !app.startPageEmbeddedOpen,
                   "the configured shortcut opens an unsaved untitled Learn copy");
             check(toUtf8(app.editorText) == original, "editable source matches the displayed example");
@@ -238,15 +239,10 @@ void learnCopies(App& app, const std::filesystem::path& dir) {
             app.currentFile = toUtf8(saved.wstring());
             saveEditorFile(app, app.hwnd);
             check(!app.editorDirty && read(saved) == toUtf8(edited), "Learn copy saves through the normal file writer");
-            BYTE previousKeys[256]{};
-            GetKeyboardState(previousKeys);
-            BYTE saveKeys[256]{};
-            saveKeys[VK_CONTROL] = 0x80;
-            SetKeyboardState(saveKeys);
-            const bool consumed = handleKeyDown(app, app.hwnd, 'S');
-            SetKeyboardState(previousKeys);
+            // An unconsumed S would type 's' if Ctrl were released before
+            // the loop translated it
+            const bool consumed = keystroke(app, 'S', {true}, L's');
             check(consumed, "Save consumes S before a released Ctrl can turn it into editor text");
-            if (!consumed) handleCharInput(app, app.hwnd, 's');
             check(!app.editorDirty && app.editorText == edited, "saving cannot append a stray shortcut character");
             exitEditMode(app);
             tabBecomeStartPage(app, app.hwnd);

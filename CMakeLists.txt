@@ -188,7 +188,8 @@ if(BUILD_TESTING)
         TINTA_CONTEXT_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/editor-context-selection.md"
         TINTA_MULTICURSOR_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/editor-multicursor-251.md"
         TINTA_PRINT_EXPORT_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/print-word-export-256.md"
-        TINTA_PRINT_EXPORT_THEMES="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/print-word-export-themes.ini")
+        TINTA_PRINT_EXPORT_THEMES="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/print-word-export-themes.ini"
+        TINTA_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME editor_features COMMAND ${CMAKE_COMMAND}
         -DTEST_BINARY=$<TARGET_FILE:input_tests>
         -DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/editor-feature-test-$<CONFIG>
