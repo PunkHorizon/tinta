@@ -1,6 +1,6 @@
 # Changelog
 
-## [v3.9.1] - 2026-10-26
+## [v3.9.2] - 2026-10-26
 
 ### Added
 - Ctrl+G goes to a line: type its number in the prompt at the top of the editor or the reading view and press Enter. The editor puts the caret at the start of the line; the reading view scrolls to where it is drawn. Requested by @derek-price (#276)
