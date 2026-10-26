@@ -1,5 +1,6 @@
 #include "d2d_init.h"
 #include "document.h"
+#include "editor.h"
 #include "input.h"
 #include "render.h"
 #include "utils.h"
@@ -111,6 +112,39 @@ void testMermaidFrontMatter(App& app) {
     }
     check(app.docText.find(L"still lays out below it") != std::wstring::npos,
           "text after the last diagram lays out");
+}
+
+// #281: a flowchart whose quoted edge labels run over lines draws, and each
+// label keeps its own lines: a word longer than the label's cap widens the
+// label instead of breaking, and no last letter wraps on its own
+void testMermaidMultilineLabels(App& app) {
+    std::ifstream file(TINTA_MERMAID_LABELS_FIXTURE, std::ios::binary);
+    check(file.good(), "Mermaid multi-line label fixture is available");
+    std::string source((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    app.root = app.parser.parse(source).root;
+    layoutDocument(app);
+    ensureLayoutComplete(app);
+    check(app.codeBlocks.size() == 2 && app.codeBlocks[0].isDiagram && app.codeBlocks[1].isDiagram,
+          "both fences draw as diagrams, not as their source");
+    const std::vector<std::wstring> labels = {
+        L"Nop", L"Push:PERSONS", L"Push:ORDERS\nPush:LABORDERS", L"Push:LABORDERPANELS",
+        L"Push:LABORDERPANELRESULTS", L"Pop\nPop\nPop\nPop", L"Pop\nPop\nPush:LABORDERPANELS",
+        L"first line\nsecond line", L"Quoted", L"an --> inside", L"plain text"};
+    int found = 0;
+    for (const auto& run : app.layoutTextRuns) {
+        if (!run.layout || run.docStart + run.docLength > app.docText.size()) continue;
+        const std::wstring text = app.docText.substr(run.docStart, run.docLength);
+        if (std::find(labels.begin(), labels.end(), text) == labels.end()) continue;
+        UINT32 lines = 0;
+        run.layout->GetLineMetrics(nullptr, 0, &lines);
+        const UINT32 expected = 1 + (UINT32)std::count(text.begin(), text.end(), L'\n');
+        std::string narrow = toUtf8(text);
+        std::replace(narrow.begin(), narrow.end(), '\n', '|');
+        check(lines == expected, "label \"" + narrow + "\" keeps " + std::to_string(expected) +
+                                     " line(s), laid out in " + std::to_string(lines));
+        ++found;
+    }
+    check(found >= 25, "the diagrams' labels are laid out (" + std::to_string(found) + ")");
 }
 
 std::wstring clipboardText(HWND window) {
@@ -255,6 +289,7 @@ int main() {
                     testCases(app);
                     testMixedFixture(app);
                     testMermaidFrontMatter(app);
+                    testMermaidMultilineLabels(app);
                 }
             }
         }

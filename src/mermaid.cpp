@@ -102,11 +102,25 @@ bool isArrowAt(std::string_view value, size_t position) {
         startsWithAt(value, position, "==>");
 }
 
+// A line break inside a double-quoted string, kept in the statement as one
+// character of the same width (#281)
+constexpr char kQuotedLineBreak = '\x1F';
+
 std::string decodeLabel(std::string_view encoded) {
     std::string decoded;
     decoded.reserve(encoded.size());
 
     for (size_t i = 0; i < encoded.size();) {
+        if (encoded[i] == kQuotedLineBreak) {
+            // The label's own line break; the source's indentation and
+            // line endings around it are not part of the text
+            while (!decoded.empty() && isSpace(decoded.back())) decoded.pop_back();
+            decoded.push_back('\n');
+            i++;
+            while (i < encoded.size() && isSpace(encoded[i])) i++;
+            continue;
+        }
+
         if (encoded[i] == '\\' && i + 1 < encoded.size()) {
             char next = encoded[i + 1];
             if (next == '"' || next == '\'' || next == '\\') {
@@ -438,6 +452,30 @@ bool parseNodeSpec(std::string_view line, size_t& position, size_t sourceOffset,
     return true;
 }
 
+// An edge's text. Quotes around it delimit a Mermaid string, as they do in
+// a node's label, and are not part of the text (#281).
+std::string decodeEdgeLabel(std::string_view text) {
+    text = trim(text);
+    if (text.size() >= 2 && text.front() == '"' && text.back() == '"') {
+        text = text.substr(1, text.size() - 2);
+    }
+    return decodeLabel(text);
+}
+
+// Past the double-quoted string starting at position, or position itself
+// when none starts there
+size_t skipQuotedString(std::string_view line, size_t position) {
+    if (position >= line.size() || line[position] != '"') return position;
+    for (size_t i = position + 1; i < line.size(); i++) {
+        if (line[i] == '\\') {
+            i++;
+        } else if (line[i] == '"') {
+            return i + 1;
+        }
+    }
+    return position;
+}
+
 bool parseArrow(std::string_view line, size_t& position, ArrowSpec& arrow,
                 std::string& error,
                 std::unordered_set<std::string>* edgeIds = nullptr) {
@@ -479,13 +517,16 @@ bool parseArrow(std::string_view line, size_t& position, ArrowSpec& arrow,
         arrow.directed = false;
         position += 3;
     } else if (startsWithAt(line, position, "--")) {
-        size_t endArrow = line.find("-->", position + 2);
+        // "-- text -->": a quoted text may hold anything, an arrow included
+        size_t textStart = position + 2;
+        skipSpaces(line, textStart);
+        size_t endArrow = line.find("-->", skipQuotedString(line, textStart));
         if (endArrow == std::string_view::npos) {
             error = "Unsupported edge syntax";
             return false;
         }
         arrow.directed = true;
-        arrow.label = std::string(trim(line.substr(position + 2, endArrow - position - 2)));
+        arrow.label = decodeEdgeLabel(line.substr(position + 2, endArrow - position - 2));
         position = endArrow + 3;
     } else {
         error = "Expected a Mermaid edge";
@@ -499,7 +540,7 @@ bool parseArrow(std::string_view line, size_t& position, ArrowSpec& arrow,
             error = "Unterminated edge label";
             return false;
         }
-        arrow.label = decodeLabel(line.substr(position + 1, labelEnd - position - 1));
+        arrow.label = decodeEdgeLabel(line.substr(position + 1, labelEnd - position - 1));
         position = labelEnd + 1;
     }
     return true;
@@ -583,6 +624,13 @@ ParseResult parse(std::string_view source) {
     for (size_t i = 0; i < normalized.size(); i++) {
         char& c = normalized[i];
         if (c == '\n') {
+            // A double-quoted string runs on to its closing quote, as in
+            // Mermaid, and its line breaks are the label's (#281): the
+            // statement continues on the next line
+            if (quote == '"') {
+                c = kQuotedLineBreak;
+                continue;
+            }
             comment = false;
             pipeLabel = false;
             continue;
@@ -856,6 +904,9 @@ ParseResult parse(std::string_view source) {
         }
 
         if (lineEnd == source.size()) break;
+        // Lines a quoted string ran over still count for the error lines
+        lineNumber += static_cast<size_t>(std::count(
+            source.begin() + lineOffset, source.begin() + lineEnd, kQuotedLineBreak));
         lineOffset = lineEnd + 1;
     }
 

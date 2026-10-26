@@ -1317,14 +1317,30 @@ static bool layoutMermaidDiagram(App& app, const std::string& source,
 
         auto& edgeLabel = edgeLabels[i];
         edgeLabel.text = toWide(diagram.edges[i].label);
+        // A pixel of slack: laid out again at exactly its measured width, a
+        // label could wrap its last letter onto a line of its own (#281)
         edgeLabel.width = std::min(
             180.0f * scale,
             std::max(60.0f * scale,
-                     measureText(app, edgeLabel.text, app.textFormat) +
+                     std::ceil(measureText(app, edgeLabel.text, app.textFormat)) + 1.0f +
                          labelPaddingX * 2.0f));
         LayoutInfo measured = createWrappedLayout(
             app, edgeLabel.text, app.textFormat,
             edgeLabel.width - labelPaddingX * 2.0f, measureHeight);
+        // A word longer than the cap widens the label, up to twice the
+        // cap, rather than break in the middle
+        FLOAT wordWidth = 0.0f;
+        if (measured.layout && SUCCEEDED(measured.layout->DetermineMinWidth(&wordWidth))) {
+            const float needed = std::min(
+                360.0f * scale, std::ceil(wordWidth) + 1.0f + labelPaddingX * 2.0f);
+            if (needed > edgeLabel.width) {
+                edgeLabel.width = needed;
+                measured.layout->Release();
+                measured = createWrappedLayout(
+                    app, edgeLabel.text, app.textFormat,
+                    edgeLabel.width - labelPaddingX * 2.0f, measureHeight);
+            }
+        }
         edgeLabel.height = std::max(
             28.0f * scale, measured.height + labelPaddingY * 2.0f);
         if (measured.layout) measured.layout->Release();

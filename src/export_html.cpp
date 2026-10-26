@@ -177,6 +177,7 @@ struct WrappedLines {
     std::vector<float> baselines;  // from block top
     float width = 0.0f;
     float height = 0.0f;
+    float minWidth = 0.0f;  // the widest word, which wrapping never breaks
 };
 
 WrappedLines wrapLines(App& app, const std::wstring& text, float wrapWidth,
@@ -203,6 +204,8 @@ WrappedLines wrapLines(App& app, const std::wstring& text, float wrapWidth,
     layout->GetMetrics(&metrics);
     out.width = metrics.widthIncludingTrailingWhitespace;
     out.height = metrics.height;
+    FLOAT minWidth = 0.0f;
+    if (SUCCEEDED(layout->DetermineMinWidth(&minWidth))) out.minWidth = minWidth;
     UINT32 lineCount = 0;
     layout->GetLineMetrics(nullptr, 0, &lineCount);
     std::vector<DWRITE_LINE_METRICS> lm(lineCount);
@@ -476,9 +479,15 @@ mermaidext::Built buildFlowchartPrims(App& app, const std::string& source,
         edgeLabel.text = toWide(diagram.edges[i].label);
         WrappedLines single =
             wrapLines(app, edgeLabel.text, 0.0f, textStyle, scale);
+        // Sized as in the viewer (#281): a pixel of slack, and a word longer
+        // than the cap widens the label, up to twice the cap, rather than
+        // break in the middle
         edgeLabel.width = std::min(
             180.0f * scale,
-            std::max(60.0f * scale, single.width + labelPadX * 2.0f));
+            std::max(60.0f * scale, std::ceil(single.width) + 1.0f + labelPadX * 2.0f));
+        edgeLabel.width = std::max(
+            edgeLabel.width,
+            std::min(360.0f * scale, std::ceil(single.minWidth) + 1.0f + labelPadX * 2.0f));
         WrappedLines wrapped = wrapLines(
             app, edgeLabel.text, edgeLabel.width - labelPadX * 2.0f,
             textStyle, scale);

@@ -211,6 +211,62 @@ void testBackslashNLineBreak() {
           "literal \\n in a label becomes a line break");
 }
 
+// #281: a double-quoted label may run over lines, as Mermaid allows, and its
+// line breaks are the label's; quotes around edge text delimit it
+const mermaid::Edge* findEdge(const mermaid::Diagram& diagram, const std::string& from,
+                              const std::string& to) {
+    for (const auto& edge : diagram.edges) {
+        if (diagram.nodes[edge.from].id == from && diagram.nodes[edge.to].id == to) return &edge;
+    }
+    return nullptr;
+}
+
+void testMultilineQuotedLabels() {
+    // The reporter's shape: front matter, a comment, tabs, CRLF, circles,
+    // hyphenated IDs, a loop and edge labels running over two to four lines
+    const std::string source =
+        "---\r\ntitle: State Machine\r\n---\r\n%% stateDiagram-v2\r\ngraph TB\r\n\r\n"
+        "\tSTART((START)) -- \"Nop\" --> MSH((MSH))\r\n"
+        "\tMSH((MSH)) -- \"Push:ORDERS\r\nPush:LABORDERS\" --> PID-NTE((PID-NTE))\r\n"
+        "\tPID-NTE((PID-NTE)) -- \"Nop\" --> PID-NTE((PID-NTE))\r\n"
+        "\tPID-NTE((PID-NTE)) -- \"Pop\r\nPop\r\n    Pop\r\nPop\" --> MSH((MSH))\r\n"
+        "\tMSH -->|\"Quoted\"| N[\"first line\r\n   second line\"]\r\n"
+        "\tN -- \"an --> inside\" --> START\r\n";
+    auto result = mermaid::parse(source);
+    check(result.success, "labels running over lines parse");
+    if (!result.success) {
+        std::cerr << "  line " << result.errorLine << ": " << result.error << '\n';
+        return;
+    }
+    const auto* nop = findEdge(result.diagram, "START", "MSH");
+    check(nop && nop->label == "Nop", "quotes around an edge's text are not part of it");
+    const auto* push = findEdge(result.diagram, "MSH", "PID-NTE");
+    check(push && push->label == "Push:ORDERS\nPush:LABORDERS",
+          "a quoted edge text keeps its line break, without the CR");
+    const auto* loop = findEdge(result.diagram, "PID-NTE", "PID-NTE");
+    check(loop && loop->label == "Nop", "a node's edge to itself parses");
+    const auto* pops = findEdge(result.diagram, "PID-NTE", "MSH");
+    check(pops && pops->label == "Pop\nPop\nPop\nPop",
+          "four lines, the indentation of one not part of the text");
+    const auto* quoted = findEdge(result.diagram, "MSH", "N");
+    check(quoted && quoted->label == "Quoted", "quotes in a |text| label delimit it too");
+    const auto* node = findNode(result.diagram, "N");
+    check(node && node->label == "first line\nsecond line", "a quoted node label runs over lines");
+    const auto* arrow = findEdge(result.diagram, "N", "START");
+    check(arrow && arrow->label == "an --> inside", "an arrow inside quoted edge text stays text");
+    check(result.diagram.nodes.size() == 4, "the diagram has its four nodes");
+
+    // Errors after a label that ran over lines still name their own line
+    auto broken = mermaid::parse("graph TD\nA -- \"one\ntwo\" --> B\nC ?? D\n");
+    check(!broken.success && broken.errorLine == 4, "a later error names its own line");
+
+    // A single quote is not a Mermaid string: an apostrophe joins nothing
+    auto apostrophe = mermaid::parse("graph TD\nA[Don't stop] --> B\nB --> C\n");
+    check(apostrophe.success && apostrophe.diagram.edges.size() == 2 &&
+              findEdge(apostrophe.diagram, "B", "C"),
+          "an apostrophe in a label leaves the next line alone");
+}
+
 void testAttributeSyntaxRejected() {
     const char* source = R"(flowchart TD
 A@{ shape: rounded, label: "Fancy" } --> B[Plain]
@@ -488,6 +544,7 @@ int main(int argc, char** argv) {
     testBomAndSemicolonStatements();
     testCyclicLayout();
     testBackslashNLineBreak();
+    testMultilineQuotedLabels();
     testAttributeSyntaxRejected();
     testLayoutExposesRanks();
     testDetectKind();
