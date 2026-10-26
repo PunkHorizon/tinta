@@ -1,5 +1,24 @@
 # Changelog
 
+## [v3.9.1] - 2026-10-26
+
+### Added
+- Ctrl+G goes to a line: type its number in the prompt at the top of the editor or the reading view and press Enter. The editor puts the caret at the start of the line; the reading view scrolls to where it is drawn. Requested by @derek-price (#276)
+- The interface is available in Russian, chosen automatically on Russian Windows or in Settings → General → Language. Contributed by @NorthMause (#274)
+- Keep deleted files in memory (Settings → General, off by default) keeps a deleted file's last content readable and editable in its tab until the tab or Tinta closes; saving it asks for a place with Save As. Contributed by @NorthMause (#275)
+- Settings → Appearance → Show notifications turns off the messages that go away on their own: copy confirmations, "Saved", status messages and the edit-mode hints. Warnings, errors and messages that need an answer still show. Requested by @megayu (#273)
+- The mouse wheel over the tab strip switches to the previous or next tab, wrapping at both ends; Ctrl+wheel still zooms. Requested by @megayu (#272)
+- `inlinecodebackground=` in `themes.ini` sets the box behind inline code: `none` drops it, a colour gives it its own. Code blocks keep `codebackground`, and the HTML and Word exports and printing follow it. Requested by @Knewhenry (#278)
+
+### Fixed
+- Mermaid flowchart labels in double quotes can run over several lines; such a diagram showed its source before. Quotes around edge text no longer show in the label, and a long one-word edge label stays on one line. Reported by @derek-price (#281)
+- Beside the preview, the editor's scrollbar shows the arrow pointer, and the preview's scrollbar can be dragged, moving both panes. Reported by @a86022 (#280)
+- A document left for a new note, the start page or an untitled tab, or reopened after its last tab closed, comes back where it was read instead of at an older place. Reported by @aweib888 (#279)
+- A single `~` between digits or Chinese, Japanese or Korean characters, as in `50~100mm`, reads as a range instead of starting a subscript. Reported by @aweib888 (#277)
+- In files with Windows (CRLF) line endings, E opens the editor at the reading position instead of above it. Reported by @derek-price (#267)
+- Opening Help no longer centres the text of the contents panel, the search results and the tab card. Reported by @megayu (#270)
+- The first and last tabs show the active tab's halo on both sides. Reported by @megayu (#271)
+
 ## [v3.9.0] - 2026-10-21
 
 ### Fixed
