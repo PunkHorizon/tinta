@@ -176,6 +176,7 @@ int runScrollSyncTests(const char* file);
 int runNotificationSettingTests();
 int runGotoLineTests(const char* file);
 int runReadingPositionTests(const char* file);
+int runSplitScrollbarTests(const char* file);
 
 int main(int argc, char** argv) {
     if (argc == 2 && std::string(argv[1]) == "--deleted-tab-tests") return runDeletedTabTests();
@@ -186,6 +187,7 @@ int main(int argc, char** argv) {
     if (argc == 2 && std::string(argv[1]) == "--notification-setting-tests") return runNotificationSettingTests();
     if (argc == 3 && std::string(argv[1]) == "--goto-line-tests") return runGotoLineTests(argv[2]);
     if (argc == 3 && std::string(argv[1]) == "--reading-position-tests") return runReadingPositionTests(argv[2]);
+    if (argc == 3 && std::string(argv[1]) == "--split-scrollbar-tests") return runSplitScrollbarTests(argv[2]);
     if (argc == 2 && std::string(argv[1]) == "--window-drag-tests") return runWindowDragTests();
     if (argc == 2 && std::string(argv[1]) == "--table-layout-tests") return runTableLayoutTests();
     if (argc == 2 && std::string(argv[1]) == "--table-input-tests") return runTableInputTests();

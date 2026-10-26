@@ -92,6 +92,9 @@ void rebuildLineStarts(App& app);
 size_t editorTopVisibleLine(App& app);
 // Scrolls the edit-mode preview to follow the editor's top line
 void syncPreviewToEditor(App& app);
+// The other way: the editor scrolls to the source line at the preview's
+// top, for a drag on the preview's scrollbar (#280)
+void editorFollowPreview(App& app);
 
 // Ctrl+G, go to line (#276): a prompt over the editor or the reading view.
 // While open it takes every key; Enter jumps, Esc closes.

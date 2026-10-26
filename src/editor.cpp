@@ -319,6 +319,59 @@ size_t editorTopVisibleLine(App& app) {
     return row;
 }
 
+// The other way round from syncPreviewToEditor: the editor scrolls to the
+// source line at the preview's top, and the next sync keeps the preview
+// there. A drag on the preview's scrollbar moves both panes (#280), as the
+// wheel over the preview does.
+void editorFollowPreview(App& app) {
+    if (!editorPreviewVisible(app) || app.editorReadingPreview || app.scrollAnchors.empty() ||
+        app.editorLineByteOffsets.empty() || app.editorLineStarts.empty()) {
+        return;
+    }
+    // The page's point at the preview's top, as the sync aligns it
+    const float y = app.scrollY + documentContentTop(app);
+    const auto& anchors = app.scrollAnchors;
+    size_t lo = 0, hi = anchors.size();
+    while (lo + 1 < hi) {
+        size_t mid = (lo + hi) / 2;
+        if (anchors[mid].renderedY <= y) lo = mid;
+        else hi = mid;
+    }
+    // Between two anchors the sync interpolates by source offset; past the
+    // last one it spreads the remaining source over the remaining page
+    double offset = (double)anchors[lo].sourceOffset;
+    float span = 0.0f;
+    double bytes = 0.0;
+    if (lo + 1 < anchors.size()) {
+        span = anchors[lo + 1].renderedY - anchors[lo].renderedY;
+        bytes = (double)anchors[lo + 1].sourceOffset - (double)anchors[lo].sourceOffset;
+    } else {
+        span = app.contentHeight - anchors[lo].renderedY;
+        bytes = (double)app.editorLineByteOffsets.back() - (double)anchors[lo].sourceOffset;
+    }
+    if (span > 0.0f && bytes > 0.0 && y > anchors[lo].renderedY) {
+        offset += std::min(1.0f, (y - anchors[lo].renderedY) / span) * bytes;
+    }
+    const auto next = std::upper_bound(app.editorLineByteOffsets.begin(),
+                                       app.editorLineByteOffsets.end(), (size_t)offset);
+    size_t line = next == app.editorLineByteOffsets.begin()
+                      ? 0 : (size_t)(next - app.editorLineByteOffsets.begin() - 1);
+    line = std::min(line, app.editorLineStarts.size() - 1);
+
+    float lineHeight = app.editorTextFormat ? app.editorTextFormat->GetFontSize() * 1.5f : 20.0f;
+    float row = (float)line;
+    if (editorWrapOn(app)) {
+        ensureEditorRowMetrics(app);
+        if (line < app.editorRowStarts.size()) row = (float)app.editorRowStarts[line];
+    }
+    const float editorMax = std::max(0.0f, app.editorContentHeight - (float)app.height);
+    app.editorScrollY = std::clamp(row * lineHeight, 0.0f, editorMax);
+    // Rounding must not put the top a row short of the line
+    if (editorTopVisibleLine(app) < line && app.editorScrollY < editorMax) {
+        app.editorScrollY = std::min(editorMax, app.editorScrollY + 0.5f);
+    }
+}
+
 // The edit-mode preview follows the editor: the editor's top line maps
 // through the source-offset scroll anchors the layout records to a
 // preview scroll position (#77, #85). Called once per frame.
@@ -3606,6 +3659,13 @@ static size_t editorPosFromClick(App& app, int x, int y) {
     return lineStart + col;
 }
 
+// The band the editor's scrollbar takes presses in, at the pane's right edge
+static bool overEditorScrollbar(const App& app, float x) {
+    const float editorWidth = editorPaneWidth(app);
+    return app.editorContentHeight > app.height && x >= editorWidth - dpi(app, 14.0f) &&
+           x <= editorWidth - dpi(app, 2.0f);
+}
+
 void handleEditorMouseDown(App& app, HWND hwnd, int x, int y) {
     float editorWidth = editorPaneWidth(app);
 
@@ -3618,9 +3678,7 @@ void handleEditorMouseDown(App& app, HWND hwnd, int x, int y) {
     // Editor scrollbar: a track click jumps, and the drag follows (#121).
     // Checked before the separator, whose grab zone overlaps the thumb —
     // the thin scrollbar is the more deliberate target
-    if (app.editorContentHeight > app.height &&
-        (float)x >= editorWidth - dpi(app, 14.0f) &&
-        (float)x <= editorWidth - dpi(app, 2.0f)) {
+    if (overEditorScrollbar(app, (float)x)) {
         float maxScroll = app.editorContentHeight - app.height;
         float sbHeight = (float)app.height / app.editorContentHeight * app.height;
         sbHeight = std::max(sbHeight, dpi(app, 30.0f));
@@ -3793,6 +3851,8 @@ void handleEditorMouseMove(App& app, HWND hwnd, int x, int y) {
     }
 
     if (app.editorScrollbarDragging) {
+        // The pointer stays an arrow for the whole drag, over the text too (#280)
+        SetCursor(LoadCursor(nullptr, IDC_ARROW));
         float maxScroll = std::max(0.0f, app.editorContentHeight - app.height);
         float sbHeight = (float)app.height /
                          std::max(1.0f, app.editorContentHeight) * app.height;
@@ -3842,6 +3902,9 @@ void handleEditorMouseMove(App& app, HWND hwnd, int x, int y) {
     if (editSplitPreview(app) && (float)x >= editorWidth &&
         (float)x < editorWidth + editSeamWidth(app)) {
         SetCursor(cursorSizeWE);
+        return;
+    } else if (overEditorScrollbar(app, (float)x)) {
+        SetCursor(cursorArrow);  // a control, not text (#280)
         return;
     } else if (x < editorWidth) {
         SetCursor(cursorIBeam);

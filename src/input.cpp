@@ -1063,6 +1063,9 @@ static bool moveDocumentScrollbarDrag(App& app, HWND hwnd) {
                 const float deltaY = (float)app.mouseY - app.scrollbarDragStartY;
                 app.scrollY = std::clamp(app.scrollbarDragStartScroll + deltaY / trackHeight * maxScroll, 0.0f, maxScroll);
                 app.targetScrollY = app.scrollY;
+                // Beside the editor the preview follows the editor each
+                // frame, so the editor goes where the thumb is taken (#280)
+                if (app.editMode) editorFollowPreview(app);
             }
         }
     } else {
@@ -2259,6 +2262,7 @@ void handleMouseDown(App& app, HWND hwnd, WPARAM, LPARAM lParam) {
             app.targetScrollY = app.scrollY;
             app.scrollbarDragStartScroll = app.scrollY;
             app.scrollbarDragStartY = (float)app.mouseY;
+            if (app.editMode) editorFollowPreview(app);  // as for the drag (#280)
         }
         InvalidateRect(hwnd, nullptr, FALSE);
     }
