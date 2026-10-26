@@ -4,6 +4,8 @@
 #include "editor.h"
 #include "export.h"
 #include "input.h"
+#include "mermaid_ext.h"
+#include "mermaid_layout_checks.h"
 #include "render.h"
 #include "utils.h"
 
@@ -151,6 +153,36 @@ void testMermaidMultilineLabels(App& app) {
         ++found;
     }
     check(found >= 25, "the diagrams' labels are laid out (" + std::to_string(found) + ")");
+}
+
+// State diagrams with notes, loops and back edges among other Markdown:
+// every fence draws, and with the app's own text no label, note or edge
+// lands on a state, a note or another label
+void testMermaidStateDiagrams(App& app) {
+    std::ifstream file(TINTA_MERMAID_STATES_FIXTURE, std::ios::binary);
+    check(file.good(), "Mermaid state diagram fixture is available");
+    std::string source((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    app.root = app.parser.parse(source).root;
+    layoutDocument(app);
+    ensureLayoutComplete(app);
+    int diagrams = 0;
+    const float scale = app.contentScale * app.zoomFactor;
+    for (const auto& block : app.codeBlocks) {
+        if (!block.isDiagram) continue;
+        ++diagrams;
+        const std::string code = toUtf8(block.codeText);
+        const auto built = buildDiagramPrims(app, code, scale);
+        const auto problems = mermaidcheck::layoutProblems(
+            built, scale, mermaidext::detectKind(code) == mermaidext::Kind::State);
+        for (size_t i = 0; i < problems.size() && i < 8; ++i) {
+            std::cerr << "  diagram " << diagrams << ": " << problems[i] << '\n';
+        }
+        check(problems.empty(), "nothing overlaps in diagram " + std::to_string(diagrams) +
+                                    " with the app's text");
+    }
+    check(diagrams == 8, "the fixture's eight diagrams draw, not " + std::to_string(diagrams));
+    check(app.docText.find(L"Overlapping labels") != std::wstring::npos,
+          "text after the diagrams lays out");
 }
 
 // Mermaid's asymmetric outline around a node: (0,0) (w,0) (w,h) (0,h), then
@@ -516,6 +548,7 @@ int main() {
                     testMermaidMultilineLabels(app);
                     testMermaidC4Labels(app);
                     testMermaidAsymmetricShape(app);
+                    testMermaidStateDiagrams(app);
                 }
             }
         }

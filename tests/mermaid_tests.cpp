@@ -1,8 +1,10 @@
 #include "mermaid.h"
 #include "mermaid_ext.h"
 #include "c4_label_checks.h"
+#include "mermaid_layout_checks.h"
 
 #include <algorithm>
+#include <cctype>
 #include <fstream>
 #include <iostream>
 #include <iterator>
@@ -1132,6 +1134,258 @@ void testC4CrowdedLabels() {
     checkC4Labels("sixteen relations between two elements", pair, 1.0f);
 }
 
+// --- state, class and ER layouts: nothing drawn over anything else ---
+
+using mermaidcheck::Box;
+using mermaidcheck::hasText;
+using mermaidcheck::overlap;
+using mermaidcheck::textBox;
+
+// Prints what collides in a diagram under `name` (see mermaid_layout_checks.h)
+void checkLayout(const std::string& name, const mermaidext::Built& built, float scale,
+                 bool state = true) {
+    auto problems = mermaidcheck::layoutProblems(built, scale, state);
+    for (size_t i = 0; i < problems.size() && i < 12; i++) {
+        std::cerr << "  " << name << ": " << problems[i] << '\n';
+    }
+    check(problems.empty(), ("nothing overlaps in " + name).c_str());
+}
+
+std::string withDirection(const std::string& source, const char* direction) {
+    size_t newline = source.find('\n');
+    return source.substr(0, newline + 1) + "    direction " + direction + "\n" +
+           source.substr(newline + 1);
+}
+
+// fakeMeasure at a zoom, as the app measures text at its scale
+mermaidext::Measure scaledMeasure(float scale) {
+    return [scale](const std::string& text, const mermaidext::TextStyle& style,
+                   float wrap) {
+        mermaidext::Size size = fakeMeasure(text, style, wrap);
+        return mermaidext::Size{size.w * scale, size.h * scale};
+    };
+}
+
+// Closer to the app's text: a 14 px font scaled by the style and zoom,
+// uneven glyph widths, and wrapping at the given width
+mermaidext::Measure proportionalMeasure(float scale) {
+    return [scale](const std::string& text, const mermaidext::TextStyle& style,
+                   float wrap) {
+        float font = 14.0f * style.scale * scale * (style.bold ? 1.04f : 1.0f);
+        float lineWidth = 0.0f;
+        float widest = 0.0f;
+        int lines = text.empty() ? 0 : 1;
+        for (char c : text) {
+            if (c == '\n') {
+                lines++;
+                lineWidth = 0.0f;
+                continue;
+            }
+            float glyph = font * (c == ' '                                         ? 0.28f
+                                  : std::isupper(static_cast<unsigned char>(c)) ? 0.63f
+                                                                                : 0.513f);
+            if (wrap > 0.0f && lineWidth + glyph > wrap) {
+                lines++;
+                lineWidth = 0.0f;
+            }
+            lineWidth += glyph;
+            widest = std::max(widest, lineWidth);
+        }
+        return mermaidext::Size{widest, static_cast<float>(lines) * font * 1.3301f};
+    };
+}
+
+const char* const kStateRepro = R"(stateDiagram-v2
+    [*] --> Reading
+    Reading --> Editing : press colon
+    Editing --> Reading : Esc Esc
+    Editing --> Saving : Ctrl+S
+    Saving --> Editing
+    Reading --> Searching : F
+    Searching --> Reading : Esc
+    Reading --> [*] : Q
+    note right of Editing : Source on the left, preview on the right
+)";
+
+// A back edge and a note beside a state with neighbours: the label chip,
+// the note and the edge all landed on "Searching"
+void testStateOverlapRepro() {
+    const char* const kDirections[] = {"TB", "LR", "BT", "RL"};
+    for (float scale : {1.0f, 1.75f}) {
+        for (const char* direction : kDirections) {
+            std::string source = std::string(direction) == "TB"
+                                     ? std::string(kStateRepro)
+                                     : withDirection(kStateRepro, direction);
+            auto built = mermaidext::build(mermaidext::Kind::State, source,
+                                           scaledMeasure(scale), scale);
+            std::string name = std::string("repro ") + direction + " at " +
+                               std::to_string(scale).substr(0, 4);
+            checkLayout(name, built, scale);
+            Box searching = textBox(built, "Searching");
+            check(!overlap(textBox(built, "Esc Esc"), searching),
+                  "the Esc Esc label clears Searching");
+            check(!overlap(textBox(built, "Source on the left, preview on the right"),
+                           searching),
+                  "the note clears Searching");
+        }
+    }
+}
+
+// Machines with self-loops, notes on both sides and stacked on one state,
+// choices, forks and joins, long labels, and edges back over many ranks
+void testStateMachines() {
+    const char* const kMachines[] = {
+        R"(stateDiagram-v2
+    [*] --> Stopped
+    Stopped --> Playing : play
+    Playing --> Paused : pause
+    Paused --> Playing : resume
+    Playing --> Stopped : stop
+    Paused --> Stopped : stop
+    Playing --> Playing : next track
+    Stopped --> [*] : eject
+    note left of Paused : Position is kept
+    note right of Playing : Volume keys work here
+)",
+        R"(stateDiagram-v2
+    state check <<choice>>
+    state split <<fork>>
+    state merge <<join>>
+    [*] --> Received
+    Received --> check : validate
+    check --> Rejected : invalid
+    check --> split : valid
+    split --> Packing
+    split --> Billing
+    Packing --> merge
+    Billing --> merge
+    merge --> Shipped
+    Shipped --> Delivered : signed for
+    Shipped --> Received : returned to sender
+    Rejected --> [*]
+    Delivered --> [*]
+    Received --> Cancelled : customer cancels before packing
+    Cancelled --> [*]
+)",
+        R"(stateDiagram-v2
+    direction LR
+    [*] --> Idle
+    Idle --> Connecting : dial
+    Connecting --> Connected : handshake ok
+    Connecting --> Idle : timeout
+    Connecting --> Connecting : retry
+    Connected --> Idle : hang up
+    Connected --> Error : lost carrier
+    Error --> Connecting : redial
+    Error --> Idle : give up
+    Idle --> [*]
+    note right of Connecting : Three tries at most
+    note left of Connected : Keep-alive every 30 s
+)",
+        R"(stateDiagram-v2
+    [*] --> A
+    A --> B : one
+    A --> C : two
+    A --> D : three
+    B --> E : four
+    C --> E : five
+    D --> E : six
+    E --> A : back to the start
+    E --> B : again
+    D --> A : undo
+    C --> C : stay
+    C --> C : and stay
+    B --> F : skip ahead
+    E --> F : finish
+    F --> [*]
+    A --> F : shortcut over everything
+    note right of E : first note
+    note right of E : second note on the same state
+    note left of A : notes on both sides
+)",
+        R"(stateDiagram-v2
+    direction BT
+    s1 : A state with
+    s1 : two descriptions
+    [*] --> s1
+    s1 --> s2 : a long transition label that is wider than any state
+    s2 --> s3
+    s3 --> s1 : back
+    s2 --> s2 : loop
+    s3 --> [*]
+    note left of s2 : left of s2
+)",
+    };
+    const char* const kDirections[] = {"", "LR", "BT", "RL"};
+    size_t index = 0;
+    for (const char* machine : kMachines) {
+        index++;
+        for (const char* direction : kDirections) {
+            std::string source = *direction ? withDirection(machine, direction)
+                                            : std::string(machine);
+            for (float scale : {1.0f, 1.75f}) {
+                auto built = mermaidext::build(mermaidext::Kind::State, source,
+                                               scaledMeasure(scale), scale);
+                checkLayout("machine " + std::to_string(index) + " " +
+                                (*direction ? direction : "as written") + " at " +
+                                std::to_string(scale).substr(0, 4),
+                            built, scale);
+            }
+            // Uneven text at uneven zooms, as printing and the HTML export
+            // lay diagrams out; an exact lane spacing once looped forever
+            for (float scale : {0.7f, 0.8333f, 1.15f, 1.37f}) {
+                auto built = mermaidext::build(mermaidext::Kind::State, source,
+                                               proportionalMeasure(scale), scale);
+                checkLayout("machine " + std::to_string(index) + " " +
+                                (*direction ? direction : "as written") +
+                                " with real text at " + std::to_string(scale).substr(0, 4),
+                            built, scale);
+            }
+        }
+    }
+}
+
+// Class and ER diagrams share the router: their edges and chips keep clear
+// too, with markers and multiplicities at both ends
+void testClassAndErLayouts() {
+    const char* const kClass = R"(classDiagram
+    Animal <|-- Duck
+    Animal <|-- Fish
+    Animal <|-- Zebra
+    Animal : +int age
+    Animal : +isMammal()
+    Duck : +swim()
+    Fish : +swim()
+    Zebra : +run()
+    Duck "1" --> "*" Pond : lives in
+    Pond --> Duck : feeds
+    Zebra --> Zebra : herds with
+    Pond ..> Animal : waters
+)";
+    const char* const kEr = R"(erDiagram
+    CUSTOMER ||--o{ ORDER : places
+    CUSTOMER ||--o{ ADDRESS : has
+    ORDER ||--|{ LINE-ITEM : contains
+    LINE-ITEM }o--|| PRODUCT : describes
+    PRODUCT ||--o{ CUSTOMER : "recommended to"
+    CUSTOMER {
+        string name PK
+        string email
+    }
+)";
+    for (float scale : {1.0f, 1.75f}) {
+        auto classes = mermaidext::build(mermaidext::Kind::Class, kClass,
+                                         scaledMeasure(scale), scale);
+        checkLayout("class diagram", classes, scale, false);
+        check(hasText(classes, "lives in") && hasText(classes, "*"),
+              "class labels and multiplicities are drawn");
+        auto entities = mermaidext::build(mermaidext::Kind::Er, kEr,
+                                          scaledMeasure(scale), scale);
+        checkLayout("ER diagram", entities, scale, false);
+        check(hasText(entities, "recommended to"), "ER labels are drawn");
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1149,6 +1403,9 @@ int main(int argc, char** argv) {
     testDetectKind();
     testExtBuilders();
     testExtFallbacks();
+    testStateOverlapRepro();
+    testStateMachines();
+    testClassAndErLayouts();
     testFrontMatterFixture();
     testC4ReportedLabels();
     testC4LabelLayouts();

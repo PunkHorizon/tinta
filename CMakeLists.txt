@@ -303,7 +303,8 @@ if(BUILD_TESTING)
         TINTA_MERMAID_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/mermaid-front-matter-261.md"
         TINTA_MERMAID_LABELS_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/mermaid-multiline-labels-281.md"
         TINTA_MERMAID_C4_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/mermaid-c4-labels.md"
-        TINTA_MERMAID_ASYMMETRIC_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/mermaid-asymmetric-shape.md")
+        TINTA_MERMAID_ASYMMETRIC_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/mermaid-asymmetric-shape.md"
+        TINTA_MERMAID_STATES_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/mermaid-state-diagrams.md")
     add_test(NAME code_block_layout COMMAND code_block_layout_tests)
 
     add_executable(syntax_tests tests/syntax_tests.cpp ${INPUT_TEST_SOURCES})

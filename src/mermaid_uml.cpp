@@ -7,8 +7,10 @@
 #include "mermaid_ext.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
+#include <limits>
 #include <map>
 #include <string>
 #include <vector>
@@ -22,6 +24,16 @@ constexpr float kNodeGap = 34.0f;
 constexpr float kRankGap = 64.0f;
 constexpr float kEdgeLabelPad = 5.0f;
 constexpr float kMarkerDepth = 11.0f;
+constexpr float kNoteGap = 16.0f;    // a node to the note beside it
+constexpr float kNoteStack = 8.0f;   // between notes on one side
+constexpr float kLaneClear = 26.0f;  // a lane to the nodes it passes
+constexpr float kLaneStep = 12.0f;   // between parallel lanes
+constexpr float kTrackStep = 8.0f;   // between parallel runs in a gap
+constexpr float kPortStep = 9.0f;    // between stubs on one side of a node
+constexpr float kLoopReach = 26.0f;  // a self-loop out from its node
+constexpr float kChipClear = 3.0f;   // a chip to what it must not touch
+constexpr float kCrossCost = 150.0f;  // route length a crossing is worth
+constexpr float kHuge = std::numeric_limits<float>::max() / 4.0f;
 
 enum class Marker {
     None,
@@ -69,6 +81,8 @@ struct GraphNodes {
 
 struct RoutedEdge {
     std::vector<Point> points;
+    bool chipBeside = false;  // a self-loop's chip has a spot kept for it
+    Point chipAt;
 };
 
 // The rank layout is longest-path over a DAG; cyclic graphs (the norm for
@@ -128,108 +142,962 @@ mermaid::Diagram acyclicForRanking(const mermaid::Diagram& diagram) {
     for (size_t i = 0; i < ranking.edges.size(); i++) {
         if (reversed[i]) std::swap(ranking.edges[i].from, ranking.edges[i].to);
     }
+    // A self-loop keeps its node's in-degree above zero for good, which
+    // would drop the node and everything after it into the fallback order
+    ranking.edges.erase(
+        std::remove_if(ranking.edges.begin(), ranking.edges.end(),
+                       [](const mermaid::Edge& edge) {
+                           return edge.from == edge.to;
+                       }),
+        ranking.edges.end());
     return ranking;
 }
 
-// Elbow-routes every edge the way the flowchart renderer does, against
-// laid-out node rects. Returns per-edge polylines (diagram coordinates).
-std::vector<RoutedEdge> routeEdges(const mermaid::Diagram& diagram,
-                                   const mermaid::Layout& layout,
-                                   float scale, float& maxRight,
-                                   float& maxBottom) {
-    std::vector<RoutedEdge> routed(diagram.edges.size());
-    bool vertical =
-        diagram.direction == mermaid::Direction::TopToBottom ||
-        diagram.direction == mermaid::Direction::BottomToTop;
-    bool topToBottom = diagram.direction == mermaid::Direction::TopToBottom;
-    bool leftToRight = diagram.direction == mermaid::Direction::LeftToRight;
-    size_t exteriorLane = 0;
+// Layout and routing work in a frame where ranks run down the y axis: LR
+// and RL diagrams are transposed into it, BT and RL flipped, and every
+// result is mapped back to the diagram's own frame at the end
+struct Frame {
+    bool transpose = false;
+    bool flip = false;
+    float extent = 0.0f;  // the height the flip mirrors
 
-    for (size_t i = 0; i < diagram.edges.size(); i++) {
-        const auto& edge = diagram.edges[i];
-        if (edge.from >= layout.nodes.size() ||
-            edge.to >= layout.nodes.size()) {
-            continue;
-        }
-        const auto& from = layout.nodes[edge.from];
-        const auto& to = layout.nodes[edge.to];
-        float fromCx = (from.left + from.right) * 0.5f;
-        float fromCy = (from.top + from.bottom) * 0.5f;
-        float toCx = (to.left + to.right) * 0.5f;
-        float toCy = (to.top + to.bottom) * 0.5f;
-        bool selfLoop = edge.from == edge.to;
-        bool skipsRanks = false;
-        if (edge.from < layout.ranks.size() && edge.to < layout.ranks.size()) {
-            size_t fromRank = layout.ranks[edge.from];
-            size_t toRank = layout.ranks[edge.to];
-            skipsRanks = (fromRank < toRank ? toRank - fromRank
-                                            : fromRank - toRank) > 1;
-        }
+    Size in(Size size) const {
+        return transpose ? Size{size.h, size.w} : size;
+    }
+    Point out(Point point) const {
+        if (flip) point.y = extent - point.y;
+        return transpose ? Point{point.y, point.x} : point;
+    }
+    mermaid::Rect out(const mermaid::Rect& rect) const {
+        Point a = out(Point{rect.left, rect.top});
+        Point b = out(Point{rect.right, rect.bottom});
+        return {std::min(a.x, b.x), std::min(a.y, b.y), std::max(a.x, b.x),
+                std::max(a.y, b.y)};
+    }
+};
 
-        auto& points = routed[i].points;
-        if (selfLoop) {
-            float lane = (30.0f + exteriorLane++ * 14.0f) * scale;
-            points = {
-                {from.right, fromCy - 8.0f * scale},
-                {from.right + lane, fromCy - 8.0f * scale},
-                {from.right + lane, fromCy + 8.0f * scale},
-                {from.right, fromCy + 8.0f * scale},
-            };
-        } else if (vertical) {
-            bool forward =
-                !skipsRanks &&
-                (topToBottom ? toCy > fromCy : toCy < fromCy);
-            if (forward) {
-                float startY = topToBottom ? from.bottom : from.top;
-                float endY = topToBottom ? to.top : to.bottom;
-                float middle = (startY + endY) * 0.5f;
-                points = {
-                    {fromCx, startY},
-                    {fromCx, middle},
-                    {toCx, middle},
-                    {toCx, endY},
-                };
-            } else {
-                float lane = (30.0f + exteriorLane++ * 14.0f) * scale;
-                float laneX = std::max(from.right, to.right) + lane;
-                points = {
-                    {from.right, fromCy},
-                    {laneX, fromCy},
-                    {laneX, toCy},
-                    {to.right, toCy},
-                };
+// A note laid out beside its node across the rank direction, inside the
+// node's slot, so no neighbour can overlap it. "after" puts it right of
+// the node in vertical layouts and below it in horizontal ones, where
+// Mermaid puts a "right of" note.
+struct Attachment {
+    size_t node = 0;
+    bool after = true;
+    Size size;  // diagram frame
+};
+
+// Laid-out node boxes, notes and edge routes, in the diagram's frame
+struct Scene {
+    std::vector<mermaid::Rect> boxes;
+    std::vector<mermaid::Rect> attachments;  // one per Attachment
+    std::vector<RoutedEdge> routes;
+};
+
+struct Segment {
+    Point a;
+    Point b;
+};
+
+float pathLength(const std::vector<Point>& points) {
+    float total = 0.0f;
+    for (size_t p = 1; p < points.size(); p++) {
+        total += std::abs(points[p].x - points[p - 1].x) +
+                 std::abs(points[p].y - points[p - 1].y);
+    }
+    return total;
+}
+
+// How far two intervals overlap; negative when they are apart
+float sharedSpan(float a0, float a1, float b0, float b1) {
+    return std::min(std::max(a0, a1), std::max(b0, b1)) -
+           std::max(std::min(a0, a1), std::min(b0, b1));
+}
+
+// Places where a path's axis-aligned segments cross others, or run along
+// one of them
+int crossings(const std::vector<Point>& path,
+              const std::vector<Segment>& others) {
+    constexpr float kTouch = 0.5f;
+    int count = 0;
+    for (size_t p = 1; p < path.size(); p++) {
+        Segment mine{path[p - 1], path[p]};
+        bool mineFlat = std::abs(mine.a.y - mine.b.y) < kTouch;
+        for (const Segment& other : others) {
+            bool otherFlat = std::abs(other.a.y - other.b.y) < kTouch;
+            if (mineFlat == otherFlat) {
+                float offset = mineFlat ? mine.a.y - other.a.y
+                                        : mine.a.x - other.a.x;
+                float along =
+                    mineFlat
+                        ? sharedSpan(mine.a.x, mine.b.x, other.a.x, other.b.x)
+                        : sharedSpan(mine.a.y, mine.b.y, other.a.y, other.b.y);
+                if (std::abs(offset) < kTouch && along > 1.0f) count++;
+                continue;
             }
-        } else {
-            bool forward =
-                !skipsRanks &&
-                (leftToRight ? toCx > fromCx : toCx < fromCx);
-            if (forward) {
-                float startX = leftToRight ? from.right : from.left;
-                float endX = leftToRight ? to.left : to.right;
-                float middle = (startX + endX) * 0.5f;
-                points = {
-                    {startX, fromCy},
-                    {middle, fromCy},
-                    {middle, toCy},
-                    {endX, toCy},
-                };
-            } else {
-                float lane = (30.0f + exteriorLane++ * 14.0f) * scale;
-                float laneY = std::max(from.bottom, to.bottom) + lane;
-                points = {
-                    {fromCx, from.bottom},
-                    {fromCx, laneY},
-                    {toCx, laneY},
-                    {toCx, to.bottom},
-                };
+            const Segment& flat = mineFlat ? mine : other;
+            const Segment& upright = mineFlat ? other : mine;
+            if (std::min(flat.a.x, flat.b.x) + kTouch < upright.a.x &&
+                std::max(flat.a.x, flat.b.x) - kTouch > upright.a.x &&
+                std::min(upright.a.y, upright.b.y) + kTouch < flat.a.y &&
+                std::max(upright.a.y, upright.b.y) - kTouch > flat.a.y) {
+                count++;
             }
-        }
-        for (const auto& point : points) {
-            maxRight = std::max(maxRight, point.x);
-            maxBottom = std::max(maxBottom, point.y);
         }
     }
-    return routed;
+    return count;
+}
+
+// Elbow routes in the canonical frame. An edge to the next rank drops
+// through the gap between the two. Back edges and edges that skip ranks
+// run in a lane beside every node and note of the ranks they pass, joined
+// straight from the node's side, or, when something lies between the node
+// and the lane, from its top or bottom through the gap there; a back edge
+// to the rank just above may instead cross that gap directly. Ports, gap
+// runs and lanes are handed out so parallel runs keep apart, and each edge
+// takes its shortest route, counting a crossing as a detour.
+struct Router {
+    struct PortMark {
+        float at;
+        float travel;  // where the stub's lane heads: -1 up, 1 down
+    };
+    struct Run {
+        float at;
+        float from;
+        float to;
+        float half;  // half the band its chip needs, 0 without a chip
+    };
+    struct Lane {
+        float x;
+        float from;
+        float to;
+        float half;  // half the chip that sits on it
+    };
+    struct PortUse {
+        size_t node;
+        int face;
+        PortMark mark;
+    };
+    struct RunUse {
+        size_t gap;
+        Run run;
+    };
+    struct Plan {
+        std::vector<Point> points;
+        float cost = 0.0f;
+        std::vector<PortUse> ports;
+        std::vector<RunUse> runs;
+        int laneSide = -1;
+        Lane lane{};
+    };
+    struct Forward {
+        size_t edge;
+        size_t from;
+        size_t to;
+        float half = 0.0f;  // half its chip's band across the gap
+        float fromX = 0.0f;
+        float toX = 0.0f;
+        int track = 0;  // order across the gap, -1 for a straight drop
+    };
+
+    float scale = 1.0f;
+    std::vector<mermaid::Rect> boxes;
+    std::vector<mermaid::Rect> slots;  // boxes with their notes and loops
+    std::vector<size_t> ranks;
+    std::vector<std::array<bool, 2>> flanked;  // a note or loop before/after
+    std::vector<size_t> order;                 // place within the rank
+    std::vector<size_t> rankCount;
+    std::vector<float> rowTop;
+    std::vector<float> rowBottom;
+    // Stubs taken per face: 0 top, 1 bottom, 2 before (left), 3 after
+    std::vector<std::array<std::vector<PortMark>, 4>> ports;
+    std::vector<std::vector<Run>> runs;     // per gap, the gap below a rank
+    // Per gap, chip bands kept for back edges that may cross it, above and
+    // below the runs of the edges to the next rank
+    std::vector<std::array<std::vector<float>, 2>> spare;
+    std::array<std::vector<Lane>, 2> lanes;
+    std::vector<Segment> drawn;
+
+    void setup() {
+        size_t count = boxes.size();
+        size_t rankTotal = 0;
+        for (size_t rank : ranks) rankTotal = std::max(rankTotal, rank + 1);
+        rowTop.assign(rankTotal, kHuge);
+        rowBottom.assign(rankTotal, -kHuge);
+        std::vector<std::vector<size_t>> members(rankTotal);
+        for (size_t i = 0; i < count; i++) {
+            size_t rank = ranks[i];
+            members[rank].push_back(i);
+            rowTop[rank] = std::min(rowTop[rank], slots[i].top);
+            rowBottom[rank] = std::max(rowBottom[rank], slots[i].bottom);
+        }
+        order.assign(count, 0);
+        rankCount.assign(rankTotal, 0);
+        for (size_t rank = 0; rank < rankTotal; rank++) {
+            auto& row = members[rank];
+            std::sort(row.begin(), row.end(), [&](size_t a, size_t b) {
+                return slots[a].left < slots[b].left;
+            });
+            for (size_t k = 0; k < row.size(); k++) order[row[k]] = k;
+            rankCount[rank] = row.size();
+            if (row.empty()) {  // longest-path ranks leave none empty
+                rowTop[rank] = rowBottom[rank] =
+                    rank > 0 ? rowBottom[rank - 1] : 0.0f;
+            }
+        }
+        ports.assign(count, {});
+        runs.assign(rankTotal, {});
+    }
+
+    size_t gapCount() const { return rowTop.empty() ? 0 : rowTop.size() - 1; }
+
+    float gapMid(size_t gap) const {
+        return (rowBottom[gap] + rowTop[gap + 1]) * 0.5f;
+    }
+
+    float centerX(size_t node) const {
+        return (boxes[node].left + boxes[node].right) * 0.5f;
+    }
+
+    // Something besides the node lies on that side of it in its rank
+    bool blocked(size_t node, int side) const {
+        if (flanked[node][side]) return true;
+        return side ? order[node] + 1 < rankCount[ranks[node]]
+                    : order[node] > 0;
+    }
+
+    // A free stub position on a face: `preferred` when free, else the
+    // nearest free step from it, `toward` first, within [lo, hi]
+    float pickPort(size_t node, int face, float preferred, float lo,
+                   float hi, float toward) const {
+        if (lo > hi) lo = hi = (lo + hi) * 0.5f;
+        float step = kPortStep * scale;
+        const auto& used = ports[node][face];
+        auto free = [&](float at) {
+            for (const PortMark& mark : used) {
+                if (std::abs(mark.at - at) < step * 0.8f) return false;
+            }
+            return true;
+        };
+        for (int k = 0; k <= 8; k++) {
+            for (float sign : {toward, -toward}) {
+                float at = preferred + sign * static_cast<float>(k) * step;
+                if (at >= lo - 0.01f && at <= hi + 0.01f && free(at)) {
+                    return at;
+                }
+                if (k == 0) break;
+            }
+        }
+        return std::min(std::max(preferred, lo), hi);
+    }
+
+    // A height in a gap for a run over [x1, x2] with a chip band `half`
+    // either side: off the gap's middle, on the `prefer` side first, inside
+    // the gap and clear of the runs it overlaps by both their bands;
+    // failing that by the wider band, then by a step
+    float pickRun(size_t gap, float x1, float x2, float prefer,
+                  float half) const {
+        float lo = std::min(x1, x2);
+        float hi = std::max(x1, x2);
+        float step = kTrackStep * scale;
+        float mid = gapMid(gap);
+        float top = rowBottom[gap];
+        float bottom = rowTop[gap + 1];
+        int most = std::max(
+            1, static_cast<int>(((bottom - top) * 0.5f - 2.0f * scale) / step));
+        for (int strict = 2; strict >= 0; strict--) {
+            for (int k = 1; k <= most; k++) {
+                for (float sign : {prefer, -prefer}) {
+                    float at = mid + sign * static_cast<float>(k) * step;
+                    if (strict > 0 &&
+                        (at - half < top || at + half > bottom)) {
+                        continue;
+                    }
+                    bool free = true;
+                    for (const Run& run : runs[gap]) {
+                        if (run.from > hi + step || run.to < lo - step) {
+                            continue;
+                        }
+                        float need = strict == 2   ? run.half + half
+                                     : strict == 1 ? std::max(run.half, half)
+                                                   : 0.0f;
+                        if (std::abs(run.at - at) <
+                            std::max(need, step * 0.6f)) {
+                            free = false;
+                            break;
+                        }
+                    }
+                    if (free) return at;
+                }
+            }
+        }
+        return mid + prefer * step;
+    }
+
+    // The nearest lane outside `base` that keeps clear of the lanes it
+    // runs beside, with room for a chip `half` wide either side of it
+    float pickLane(int side, float base, float from, float to,
+                   float half) const {
+        float dir = side ? 1.0f : -1.0f;
+        float spacing = kLaneStep * scale;
+        float x = base + dir * std::max(kLaneClear * scale,
+                                        half + (kChipClear + 5.0f) * scale);
+        bool moved = true;
+        while (moved) {
+            moved = false;
+            for (const Lane& lane : lanes[side]) {
+                if (lane.to + spacing < from || lane.from - spacing > to) {
+                    continue;
+                }
+                float need = lane.half + half + spacing;
+                float past = lane.x + dir * need;
+                if (std::abs(x - lane.x) < need && (past - x) * dir > 0.01f) {
+                    x = past;
+                    moved = true;
+                }
+            }
+        }
+        return x;
+    }
+
+    float cost(const std::vector<Point>& points) const {
+        return pathLength(points) +
+               kCrossCost * scale *
+                   static_cast<float>(crossings(points, drawn));
+    }
+
+    void addDrawn(const std::vector<Point>& points) {
+        for (size_t p = 1; p < points.size(); p++) {
+            drawn.push_back({points[p - 1], points[p]});
+        }
+    }
+
+    void commit(const Plan& plan) {
+        for (const PortUse& use : plan.ports) {
+            ports[use.node][use.face].push_back(use.mark);
+        }
+        for (const RunUse& use : plan.runs) runs[use.gap].push_back(use.run);
+        if (plan.laneSide >= 0) lanes[plan.laneSide].push_back(plan.lane);
+        addDrawn(plan.points);
+    }
+
+    // Ports and order across the gap for the edges to the next rank.
+    // Fanned, each edge has its own port on both faces, in the order of
+    // the nodes at its other end, and rightward runs nest under the ones
+    // right of them, leftward runs under the ones left of them, so edges
+    // that can avoid crossing do. Unfanned, edges share the middle of each
+    // face, and only edges between the same two nodes part.
+    void planForward(std::vector<Forward>& edges, bool fan) const {
+        float inset = 2.0f * scale;
+        if (fan) {
+            auto spread = [&](std::vector<Forward*>& group, size_t node,
+                              bool out) {
+                const mermaid::Rect& rect = boxes[node];
+                float n = static_cast<float>(group.size());
+                float step = std::min((rect.right - rect.left) / (n + 1.0f),
+                                      16.0f * scale);
+                for (size_t k = 0; k < group.size(); k++) {
+                    float x = centerX(node) +
+                              (static_cast<float>(k) - (n - 1.0f) * 0.5f) *
+                                  step;
+                    (out ? group[k]->fromX : group[k]->toX) = x;
+                }
+            };
+            std::map<size_t, std::vector<Forward*>> bySource;
+            std::map<size_t, std::vector<Forward*>> byTarget;
+            for (Forward& edge : edges) bySource[edge.from].push_back(&edge);
+            for (auto& [node, group] : bySource) {
+                std::stable_sort(group.begin(), group.end(),
+                                 [&](const Forward* a, const Forward* b) {
+                                     return centerX(a->to) < centerX(b->to);
+                                 });
+                spread(group, node, true);
+            }
+            for (Forward& edge : edges) byTarget[edge.to].push_back(&edge);
+            for (auto& [node, group] : byTarget) {
+                std::stable_sort(group.begin(), group.end(),
+                                 [](const Forward* a, const Forward* b) {
+                                     return a->fromX < b->fromX;
+                                 });
+                spread(group, node, false);
+            }
+        } else {
+            std::map<std::pair<size_t, size_t>, std::vector<Forward*>> pairs;
+            for (Forward& edge : edges) {
+                pairs[{edge.from, edge.to}].push_back(&edge);
+            }
+            for (auto& [ends, group] : pairs) {
+                float n = static_cast<float>(group.size());
+                bool right = centerX(ends.second) > centerX(ends.first);
+                for (size_t k = 0; k < group.size(); k++) {
+                    float shift = (static_cast<float>(k) - (n - 1.0f) * 0.5f) *
+                                  kPortStep * scale;
+                    group[k]->fromX = centerX(ends.first) + shift;
+                    group[k]->toX = centerX(ends.second) + shift;
+                    group[k]->track =
+                        static_cast<int>(right ? group.size() - 1 - k : k);
+                }
+            }
+        }
+        for (Forward& edge : edges) {
+            const mermaid::Rect& f = boxes[edge.from];
+            const mermaid::Rect& t = boxes[edge.to];
+            edge.fromX = std::min(std::max(edge.fromX, f.left + inset),
+                                  f.right - inset);
+            edge.toX = std::min(std::max(edge.toX, t.left + inset),
+                                t.right - inset);
+            if (std::abs(edge.toX - edge.fromX) < 0.5f) edge.track = -1;
+        }
+        if (!fan) return;
+
+        std::vector<std::vector<size_t>> byGap(gapCount());
+        for (size_t i = 0; i < edges.size(); i++) {
+            if (edges[i].track >= 0) byGap[ranks[edges[i].from]].push_back(i);
+        }
+        for (auto& group : byGap) {
+            std::stable_sort(group.begin(), group.end(),
+                             [&](size_t a, size_t b) {
+                                 const Forward& ea = edges[a];
+                                 const Forward& eb = edges[b];
+                                 bool aRight = ea.toX >= ea.fromX;
+                                 bool bRight = eb.toX >= eb.fromX;
+                                 if (aRight != bRight) return aRight;
+                                 return aRight ? ea.fromX > eb.fromX
+                                               : ea.fromX < eb.fromX;
+                             });
+            for (size_t k = 0; k < group.size(); k++) {
+                Forward& edge = edges[group[k]];
+                bool right = edge.toX >= edge.fromX;
+                int track = 0;
+                std::vector<int> others;
+                for (size_t j = 0; j < k; j++) {
+                    const Forward& other = edges[group[j]];
+                    if (sharedSpan(edge.fromX, edge.toX, other.fromX,
+                                   other.toX) <= -6.0f * scale) {
+                        continue;
+                    }
+                    if ((other.toX >= other.fromX) == right) {
+                        track = std::max(track, other.track + 1);
+                    } else {
+                        others.push_back(other.track);
+                    }
+                }
+                while (std::find(others.begin(), others.end(), track) !=
+                       others.end()) {
+                    track++;
+                }
+                edge.track = track;
+            }
+        }
+    }
+
+    // Offsets of a gap's tracks from its first, far enough apart for the
+    // chip bands on them
+    std::vector<float> trackOffsets(const std::vector<float>& halves) const {
+        std::vector<float> offsets(halves.size(), 0.0f);
+        for (size_t k = 1; k < halves.size(); k++) {
+            offsets[k] = offsets[k - 1] + std::max(kTrackStep * scale,
+                                                   halves[k - 1] + halves[k]);
+        }
+        return offsets;
+    }
+
+    size_t spareAbove(size_t gap) const {
+        return gap < spare.size() ? spare[gap][0].size() : 0;
+    }
+
+    // Per gap, the chip band of each track: the bands kept for back edges
+    // above the forward tracks, the forward tracks, the bands kept below
+    std::vector<std::vector<float>> trackHalves(
+        const std::vector<Forward>& edges) const {
+        std::vector<std::vector<float>> forward(gapCount());
+        for (const Forward& edge : edges) {
+            if (edge.track < 0) continue;
+            auto& gap = forward[ranks[edge.from]];
+            size_t track = static_cast<size_t>(edge.track);
+            if (gap.size() <= track) gap.resize(track + 1, 0.0f);
+            gap[track] = std::max(gap[track], edge.half);
+        }
+        std::vector<std::vector<float>> halves(gapCount());
+        for (size_t gap = 0; gap < halves.size(); gap++) {
+            if (gap < spare.size()) halves[gap] = spare[gap][0];
+            halves[gap].insert(halves[gap].end(), forward[gap].begin(),
+                               forward[gap].end());
+            if (gap < spare.size()) {
+                halves[gap].insert(halves[gap].end(), spare[gap][1].begin(),
+                                   spare[gap][1].end());
+            }
+        }
+        return halves;
+    }
+
+    // How tall each gap must be for its tracks with the chips on them, and
+    // for the chip of a straight drop between its source and arrowhead
+    std::vector<float> gapNeeds(const std::vector<Forward>& edges) const {
+        auto halves = trackHalves(edges);
+        std::vector<float> needs(halves.size(), 0.0f);
+        float margin = 8.0f * scale;
+        for (size_t gap = 0; gap < halves.size(); gap++) {
+            if (halves[gap].empty()) continue;
+            needs[gap] = std::max(margin, halves[gap].front()) +
+                         trackOffsets(halves[gap]).back() +
+                         std::max(margin, halves[gap].back());
+        }
+        for (const Forward& edge : edges) {
+            if (edge.track >= 0 || edge.half <= 0.0f) continue;
+            float& need = needs[ranks[edge.from]];
+            need = std::max(need,
+                            2.0f * edge.half + (kMarkerDepth + 6.0f) * scale);
+        }
+        return needs;
+    }
+
+    // Routes the forward edges: each gap's tracks centred in it, between
+    // the bands kept for back edges
+    std::vector<std::vector<Point>> placeForward(
+        const std::vector<Forward>& edges) {
+        auto halves = trackHalves(edges);
+        std::vector<std::vector<float>> heights(halves.size());
+        for (size_t gap = 0; gap < halves.size(); gap++) {
+            if (halves[gap].empty()) continue;
+            std::vector<float> offsets = trackOffsets(halves[gap]);
+            float top = rowBottom[gap];
+            float bottom = rowTop[gap + 1];
+            float span = offsets.back();
+            float room = std::max(0.0f, bottom - top - 8.0f * scale);
+            float squeeze = span > room ? room / span : 1.0f;
+            float start = (top + bottom - span * squeeze) * 0.5f;
+            heights[gap].resize(offsets.size());
+            for (size_t k = 0; k < offsets.size(); k++) {
+                heights[gap][k] = start + offsets[k] * squeeze;
+            }
+        }
+        std::vector<std::vector<Point>> paths(edges.size());
+        for (size_t i = 0; i < edges.size(); i++) {
+            const Forward& edge = edges[i];
+            const mermaid::Rect& f = boxes[edge.from];
+            const mermaid::Rect& t = boxes[edge.to];
+            size_t gap = ranks[edge.from];
+            ports[edge.from][1].push_back({edge.fromX, 1.0f});
+            ports[edge.to][0].push_back({edge.toX, 1.0f});
+            if (edge.track < 0) {
+                paths[i] = {{edge.fromX, f.bottom}, {edge.fromX, t.top}};
+            } else {
+                float y = heights[gap][spareAbove(gap) +
+                                       static_cast<size_t>(edge.track)];
+                paths[i] = {{edge.fromX, f.bottom},
+                            {edge.fromX, y},
+                            {edge.toX, y},
+                            {edge.toX, t.top}};
+                runs[gap].push_back({y, std::min(edge.fromX, edge.toX),
+                                     std::max(edge.fromX, edge.toX),
+                                     edge.half});
+            }
+            addDrawn(paths[i]);
+        }
+        return paths;
+    }
+
+    // A route through a lane before (side 0) or after (side 1) every node
+    // of the ranks from `from` to `to`
+    Plan planLane(size_t from, size_t to, int side, float half) const {
+        Plan plan;
+        size_t fromRank = ranks[from];
+        size_t toRank = ranks[to];
+        bool up = toRank < fromRank;
+        size_t first = std::min(fromRank, toRank);
+        size_t last = std::max(fromRank, toRank);
+        float base = side ? -kHuge : kHuge;
+        for (size_t i = 0; i < slots.size(); i++) {
+            if (ranks[i] < first || ranks[i] > last) continue;
+            base = side ? std::max(base, slots[i].right)
+                        : std::min(base, slots[i].left);
+        }
+        float outward = side ? 1.0f : -1.0f;
+
+        // Each end leaves its node straight from the side facing the lane,
+        // or, past a neighbour, from the face toward the other end and
+        // along the gap there
+        struct End {
+            std::vector<Point> path;  // from the node up to the lane
+            float join = 0.0f;        // where it meets the lane
+            bool viaGap = false;
+            size_t gap = 0;
+            float portX = 0.0f;
+        };
+        auto leave = [&](size_t node, bool isFrom) {
+            End end;
+            const mermaid::Rect& rect = boxes[node];
+            float travel = isFrom == up ? -1.0f : 1.0f;
+            if (!blocked(node, side)) {
+                int face = 2 + side;
+                const auto& used = ports[node][face];
+                float toward = used.empty() ? travel : -used.back().travel;
+                float y = pickPort(node, face, (rect.top + rect.bottom) * 0.5f,
+                                   rect.top + 2.0f * scale,
+                                   rect.bottom - 2.0f * scale, toward);
+                plan.ports.push_back({node, face, {y, travel}});
+                end.path = {{side ? rect.right : rect.left, y}};
+                end.join = y;
+                return end;
+            }
+            bool top = travel < 0.0f;
+            int face = top ? 0 : 1;
+            end.viaGap = true;
+            end.gap = top ? ranks[node] - 1 : ranks[node];
+            float inset = std::min(kPortStep * scale,
+                                   (rect.right - rect.left) * 0.5f -
+                                       2.0f * scale);
+            end.portX = pickPort(node, face,
+                                 side ? rect.right - inset : rect.left + inset,
+                                 rect.left + 2.0f * scale,
+                                 rect.right - 2.0f * scale, -outward);
+            end.join = pickRun(end.gap, end.portX, outward * kHuge,
+                               top ? 1.0f : -1.0f, 0.0f);
+            plan.ports.push_back({node, face, {end.portX, travel}});
+            end.path = {{end.portX, top ? rect.top : rect.bottom},
+                        {end.portX, end.join}};
+            return end;
+        };
+        End start = leave(from, true);
+        End finish = leave(to, false);
+        float low = std::min(start.join, finish.join);
+        float high = std::max(start.join, finish.join);
+        float x = pickLane(side, base, low, high, half);
+        plan.points = start.path;
+        plan.points.push_back({x, start.join});
+        plan.points.push_back({x, finish.join});
+        plan.points.insert(plan.points.end(), finish.path.rbegin(),
+                           finish.path.rend());
+        for (const End* end : {&start, &finish}) {
+            if (!end->viaGap) continue;
+            plan.runs.push_back({end->gap,
+                                 {end->join, std::min(end->portX, x),
+                                  std::max(end->portX, x), 0.0f}});
+        }
+        plan.laneSide = side;
+        plan.lane = {x, low, high, half};
+        plan.cost = cost(plan.points) + (side ? 0.0f : 20.0f * scale);
+        return plan;
+    }
+
+    // A back edge to the rank just above, straight across the gap between
+    // the two, beside the edges that go down it; `half` is its chip's band
+    Plan planGap(size_t from, size_t to, float half) const {
+        Plan plan;
+        const mermaid::Rect& f = boxes[from];
+        const mermaid::Rect& t = boxes[to];
+        float step = kPortStep * scale;
+        float fromMid = centerX(from);
+        float toMid = centerX(to);
+        float fromX = pickPort(from, 0, fromMid + step, f.left + 2.0f * scale,
+                               f.right - 2.0f * scale, 1.0f);
+        float toX = pickPort(to, 1, toMid + step, t.left + 2.0f * scale,
+                             t.right - 2.0f * scale, 1.0f);
+        plan.ports.push_back({from, 0, {fromX, -1.0f}});
+        plan.ports.push_back({to, 1, {toX, -1.0f}});
+        if (std::abs(fromX - toX) < 0.5f) {
+            plan.points = {{fromX, f.top}, {fromX, t.bottom}};
+        } else {
+            // On the side of the gap's middle where it nests with a
+            // forward edge between the same two nodes
+            size_t gap = ranks[to];
+            float y = pickRun(gap, fromX, toX, fromMid > toMid ? -1.0f : 1.0f,
+                              half);
+            plan.points = {{fromX, f.top}, {fromX, y}, {toX, y}, {toX, t.bottom}};
+            plan.runs.push_back(
+                {gap, {y, std::min(fromX, toX), std::max(fromX, toX), half}});
+        }
+        plan.cost = cost(plan.points);
+        return plan;
+    }
+};
+
+// Lays the graph out by rank with each node's notes and self-loops in its
+// slot, grows the gaps between ranks to fit the runs and chips crossing
+// them, then routes every edge, fanning edges to the next rank out over
+// their nodes' faces when `fan` is set. `boxSizes` and `chipSizes` (zero
+// for an unlabeled edge) are in the diagram's frame.
+Scene layoutScene(const mermaid::Diagram& diagram,
+                  const std::vector<mermaid::Size>& boxSizes,
+                  const std::vector<Attachment>& attachments,
+                  const std::vector<Size>& chipSizes, float nodeGap,
+                  float rankGap, float scale, bool fan) {
+    Scene scene;
+    const size_t count = diagram.nodes.size();
+    if (count == 0 || boxSizes.size() != count) return scene;
+    Frame frame;
+    frame.transpose = diagram.direction == mermaid::Direction::LeftToRight ||
+                      diagram.direction == mermaid::Direction::RightToLeft;
+    frame.flip = diagram.direction == mermaid::Direction::BottomToTop ||
+                 diagram.direction == mermaid::Direction::RightToLeft;
+    auto chipOf = [&](size_t edge) {
+        return edge < chipSizes.size() ? frame.in(chipSizes[edge]) : Size{};
+    };
+    // Half the band an edge's chip takes across the rank direction
+    auto band = [&](size_t edge) {
+        Size chip = chipOf(edge);
+        return chip.w > 0.0f ? chip.h * 0.5f + kChipClear * scale : 0.0f;
+    };
+
+    // Beside each box across the ranks: its notes, stacked along the
+    // ranks, or its self-loops, nested, with their chips stacked beyond
+    // them. Loops take the sides without notes in turn, and go over the
+    // top when both sides have notes.
+    struct Flank {
+        std::vector<size_t> notes;
+        float noteMain = 0.0f;
+        std::vector<size_t> loops;
+        float chipCross = 0.0f;
+        float chipMain = 0.0f;
+        Size room;
+    };
+    std::vector<std::array<Flank, 2>> flanks(count);
+    std::vector<std::vector<size_t>> overTop(count);
+    for (size_t a = 0; a < attachments.size(); a++) {
+        const Attachment& attachment = attachments[a];
+        if (attachment.node >= count) continue;
+        Flank& flank = flanks[attachment.node][attachment.after ? 1 : 0];
+        Size size = frame.in(attachment.size);
+        if (!flank.notes.empty()) flank.noteMain += kNoteStack * scale;
+        flank.notes.push_back(a);
+        flank.noteMain += size.h;
+        flank.room.w = std::max(flank.room.w, size.w + kNoteGap * scale);
+        flank.room.h = flank.noteMain;
+    }
+    std::vector<size_t> loopsSoFar(count, 0);
+    for (size_t e = 0; e < diagram.edges.size(); e++) {
+        const auto& edge = diagram.edges[e];
+        if (edge.from != edge.to || edge.from >= count) continue;
+        auto& sides = flanks[edge.from];
+        bool afterFree = sides[1].notes.empty();
+        bool beforeFree = sides[0].notes.empty();
+        size_t k = loopsSoFar[edge.from]++;
+        if (!afterFree && !beforeFree) {
+            overTop[edge.from].push_back(e);
+            continue;
+        }
+        Flank& flank = sides[afterFree && (!beforeFree || k % 2 == 0) ? 1 : 0];
+        flank.loops.push_back(e);
+        Size chip = chipOf(e);
+        if (chip.w <= 0.0f) continue;
+        if (flank.chipMain > 0.0f) flank.chipMain += kNoteStack * scale;
+        flank.chipMain += chip.h;
+        flank.chipCross = std::max(flank.chipCross, chip.w);
+    }
+    auto loopReach = [&](size_t k) {
+        return (kLoopReach + 10.0f * static_cast<float>(k)) * scale;
+    };
+    auto loopHalf = [&](size_t k, float boxMain) {
+        return std::max(1.0f, std::min((7.0f + 4.0f * static_cast<float>(k)) *
+                                           scale,
+                                       boxMain * 0.5f - 1.5f * scale));
+    };
+
+    std::vector<Size> box(count);
+    std::vector<mermaid::Size> slotSizes(count);
+    for (size_t i = 0; i < count; i++) {
+        box[i] = frame.in({boxSizes[i].width, boxSizes[i].height});
+        for (Flank& flank : flanks[i]) {
+            if (flank.loops.empty()) continue;
+            size_t outer = flank.loops.size() - 1;
+            flank.room.w = loopReach(outer) +
+                           (flank.chipCross > 0.0f
+                                ? kChipClear * scale + flank.chipCross
+                                : 0.0f);
+            flank.room.h =
+                std::max(2.0f * loopHalf(outer, box[i].h), flank.chipMain);
+        }
+        slotSizes[i] = {box[i].w + flanks[i][0].room.w + flanks[i][1].room.w,
+                        std::max({box[i].h, flanks[i][0].room.h,
+                                  flanks[i][1].room.h})};
+    }
+
+    mermaid::Diagram ranking = acyclicForRanking(diagram);
+    ranking.direction = mermaid::Direction::TopToBottom;
+    mermaid::Layout layout =
+        mermaid::layout(ranking, slotSizes, nodeGap, rankGap);
+    if (layout.nodes.size() != count || layout.ranks.size() != count) {
+        return scene;
+    }
+
+    Router router;
+    router.scale = scale;
+    router.ranks = layout.ranks;
+    router.boxes.resize(count);
+    router.flanked.resize(count);
+    std::vector<mermaid::Rect> notes(attachments.size());
+    // Boxes and notes in their slots
+    auto place = [&]() {
+        router.slots = layout.nodes;
+        for (size_t i = 0; i < count; i++) {
+            const mermaid::Rect& slot = layout.nodes[i];
+            float middle = (slot.top + slot.bottom) * 0.5f;
+            float left = slot.left + flanks[i][0].room.w;
+            mermaid::Rect& rect = router.boxes[i];
+            rect = {left, middle - box[i].h * 0.5f, left + box[i].w,
+                    middle + box[i].h * 0.5f};
+            for (int side = 0; side < 2; side++) {
+                const Flank& flank = flanks[i][side];
+                router.flanked[i][side] = flank.room.w > 0.0f;
+                float y = middle - flank.noteMain * 0.5f;
+                for (size_t a : flank.notes) {
+                    Size size = frame.in(attachments[a].size);
+                    float x = side ? rect.right + kNoteGap * scale
+                                   : rect.left - kNoteGap * scale - size.w;
+                    notes[a] = {x, y, x + size.w, y + size.h};
+                    y += size.h + kNoteStack * scale;
+                }
+            }
+        }
+        router.setup();
+    };
+    place();
+
+    std::vector<Router::Forward> forwards;
+    std::vector<size_t> laneEdges;
+    for (size_t e = 0; e < diagram.edges.size(); e++) {
+        const auto& edge = diagram.edges[e];
+        if (edge.from >= count || edge.to >= count || edge.from == edge.to) {
+            continue;
+        }
+        if (layout.ranks[edge.to] == layout.ranks[edge.from] + 1) {
+            forwards.push_back({e, edge.from, edge.to, band(e)});
+        } else {
+            laneEdges.push_back(e);
+        }
+    }
+    router.planForward(forwards, fan);
+
+    // Gaps grow to hold the runs across them with their chips, and a band
+    // for each back edge that may cross one directly, on the side where
+    // its run nests with an edge down between the same two nodes
+    router.spare.assign(router.gapCount(), {});
+    for (size_t e : laneEdges) {
+        const auto& edge = diagram.edges[e];
+        if (layout.ranks[edge.from] == layout.ranks[edge.to] + 1) {
+            bool above = router.centerX(edge.from) > router.centerX(edge.to);
+            router.spare[layout.ranks[edge.to]][above ? 0 : 1].push_back(
+                band(e));
+        }
+    }
+    std::vector<float> needs = router.gapNeeds(forwards);
+    std::vector<float> shift(router.rowTop.size(), 0.0f);
+    float grown = 0.0f;
+    for (size_t gap = 0; gap < needs.size(); gap++) {
+        float have = router.rowTop[gap + 1] - router.rowBottom[gap];
+        grown += std::max(0.0f, needs[gap] - have);
+        shift[gap + 1] = grown;
+    }
+    if (grown > 0.0f) {
+        for (size_t i = 0; i < count; i++) {
+            layout.nodes[i].top += shift[layout.ranks[i]];
+            layout.nodes[i].bottom += shift[layout.ranks[i]];
+        }
+        layout.height += grown;
+        place();
+    }
+    frame.extent = layout.height;
+
+    std::vector<RoutedEdge> routes(diagram.edges.size());
+    auto forwardPaths = router.placeForward(forwards);
+    for (size_t k = 0; k < forwards.size(); k++) {
+        routes[forwards[k].edge].points = std::move(forwardPaths[k]);
+    }
+
+    // Self-loops in the room kept beside their box, chips beyond them
+    for (size_t i = 0; i < count; i++) {
+        const mermaid::Rect& rect = router.boxes[i];
+        float middle = (rect.top + rect.bottom) * 0.5f;
+        float main = rect.bottom - rect.top;
+        for (int side = 0; side < 2; side++) {
+            const Flank& flank = flanks[i][side];
+            if (flank.loops.empty()) continue;
+            float dir = side ? 1.0f : -1.0f;
+            float x = side ? rect.right : rect.left;
+            float outer = loopReach(flank.loops.size() - 1);
+            float chipY = middle - flank.chipMain * 0.5f;
+            for (size_t k = 0; k < flank.loops.size(); k++) {
+                size_t e = flank.loops[k];
+                float reach = loopReach(k);
+                float half = loopHalf(k, main);
+                RoutedEdge& route = routes[e];
+                route.points = {{x, middle - half},
+                                {x + dir * reach, middle - half},
+                                {x + dir * reach, middle + half},
+                                {x, middle + half}};
+                Size chip = chipOf(e);
+                if (chip.w > 0.0f) {
+                    route.chipBeside = true;
+                    route.chipAt = {
+                        x + dir * (outer + kChipClear * scale + chip.w * 0.5f),
+                        chipY + chip.h * 0.5f};
+                    chipY += chip.h + kNoteStack * scale;
+                }
+                router.addDrawn(route.points);
+            }
+        }
+        for (size_t k = 0; k < overTop[i].size(); k++) {
+            float reach = loopReach(k);
+            float half = loopHalf(k, main);
+            float right =
+                rect.right - (3.0f + 4.0f * static_cast<float>(k)) * scale;
+            float left = std::max(rect.left + 2.0f * scale, right - 2.0f * half);
+            RoutedEdge& route = routes[overTop[i][k]];
+            route.points = {{right, rect.top},
+                            {right, rect.top - reach},
+                            {left, rect.top - reach},
+                            {left, rect.top}};
+            router.addDrawn(route.points);
+        }
+    }
+
+    // Lanes, the shortest first so longer ones pass outside them
+    auto span = [&](size_t e) {
+        size_t a = layout.ranks[diagram.edges[e].from];
+        size_t b = layout.ranks[diagram.edges[e].to];
+        return a > b ? a - b : b - a;
+    };
+    std::stable_sort(laneEdges.begin(), laneEdges.end(),
+                     [&](size_t a, size_t b) { return span(a) < span(b); });
+    for (size_t e : laneEdges) {
+        const auto& edge = diagram.edges[e];
+        if (span(e) == 0) {  // ranks never put an edge's ends side by side
+            const mermaid::Rect& f = router.boxes[edge.from];
+            const mermaid::Rect& t = router.boxes[edge.to];
+            float y = router.rowBottom[layout.ranks[edge.from]] + 12.0f * scale;
+            routes[e].points = {{router.centerX(edge.from), f.bottom},
+                                {router.centerX(edge.from), y},
+                                {router.centerX(edge.to), y},
+                                {router.centerX(edge.to), t.bottom}};
+            router.addDrawn(routes[e].points);
+            continue;
+        }
+        float half = chipOf(e).w * 0.5f;
+        Router::Plan best = router.planLane(edge.from, edge.to, 1, half);
+        Router::Plan before = router.planLane(edge.from, edge.to, 0, half);
+        if (before.cost < best.cost) best = std::move(before);
+        if (layout.ranks[edge.from] == layout.ranks[edge.to] + 1) {
+            Router::Plan direct = router.planGap(edge.from, edge.to, band(e));
+            if (direct.cost < best.cost) best = std::move(direct);
+        }
+        router.commit(best);
+        routes[e].points = std::move(best.points);
+    }
+
+    scene.boxes.resize(count);
+    for (size_t i = 0; i < count; i++) {
+        scene.boxes[i] = frame.out(router.boxes[i]);
+    }
+    scene.attachments.resize(attachments.size());
+    for (size_t a = 0; a < attachments.size(); a++) {
+        scene.attachments[a] = frame.out(notes[a]);
+    }
+    for (auto& route : routes) {
+        for (auto& point : route.points) point = frame.out(point);
+        if (route.chipBeside) route.chipAt = frame.out(route.chipAt);
+    }
+    scene.routes = std::move(routes);
+    return scene;
 }
 
 // Removes duplicate consecutive points so direction vectors are non-zero
@@ -399,21 +1267,220 @@ void emitMarker(std::vector<Prim>& prims, std::vector<Point>& points,
     }
 }
 
-// Emits the routed edge polylines with markers and label chips
+const std::string& edgeLabel(const mermaid::Diagram& diagram,
+                             const std::vector<EdgeDecor>& decors,
+                             size_t edge) {
+    return edge < decors.size() && !decors[edge].label.empty()
+               ? decors[edge].label
+               : diagram.edges[edge].label;
+}
+
+// Label chip sizes per edge, zero for an edge without a label
+std::vector<Size> measureChips(const mermaid::Diagram& diagram,
+                               const std::vector<EdgeDecor>& decors,
+                               const Measure& measure, float scale) {
+    TextStyle labelStyle;
+    labelStyle.scale = 0.9f;
+    std::vector<Size> sizes(diagram.edges.size());
+    for (size_t i = 0; i < diagram.edges.size(); i++) {
+        const std::string& label = edgeLabel(diagram, decors, i);
+        if (label.empty()) continue;
+        Size text = measure(label, labelStyle, 0.0f);
+        sizes[i] = {text.w + 2.0f * kEdgeLabelPad * scale,
+                    text.h + 4.0f * scale};
+    }
+    return sizes;
+}
+
+bool overlaps(const mermaid::Rect& a, const mermaid::Rect& b, float pad) {
+    return a.left < b.right + pad && a.right > b.left - pad &&
+           a.top < b.bottom + pad && a.bottom > b.top - pad;
+}
+
+// Whether an axis-aligned segment passes through a rectangle's inside
+bool crossesRect(Point a, Point b, const mermaid::Rect& rect) {
+    return std::min(a.x, b.x) < rect.right &&
+           std::max(a.x, b.x) > rect.left &&
+           std::min(a.y, b.y) < rect.bottom &&
+           std::max(a.y, b.y) > rect.top;
+}
+
+struct EdgeLine {
+    size_t edge;
+    Point a;
+    Point b;
+};
+
+// Where an edge's label chip goes: on its own line, nearest the line's
+// middle, where it touches no node, note or other chip and no other line;
+// failing that just beside its line; then where it covers the fewest other
+// lines, sparing the room of edges whose chips are still to come; at worst
+// at the nearest free spot around the middle. `lengths` holds each edge's
+// route length, `pending` the edges whose chips are still to come.
+mermaid::Rect placeChip(const RoutedEdge& route, size_t edge, Size size,
+                        const std::vector<mermaid::Rect>& solid,
+                        const std::vector<EdgeLine>& lines,
+                        const std::vector<float>& lengths,
+                        const std::vector<bool>& pending, float scale) {
+    float clear = kChipClear * scale;
+    auto centeredAt = [&](Point center) {
+        return mermaid::Rect{center.x - size.w * 0.5f, center.y - size.h * 0.5f,
+                             center.x + size.w * 0.5f,
+                             center.y + size.h * 0.5f};
+    };
+    auto free = [&](const mermaid::Rect& rect) {
+        for (const auto& other : solid) {
+            if (overlaps(rect, other, clear)) return false;
+        }
+        return true;
+    };
+    // One per line covered, more for covering much of a line whose chip
+    // is still to come
+    auto covered = [&](const mermaid::Rect& rect) {
+        float cost = 0.0f;
+        for (const auto& line : lines) {
+            if (line.edge == edge || !crossesRect(line.a, line.b, rect)) {
+                continue;
+            }
+            cost += 1.0f;
+            if (line.edge < pending.size() && pending[line.edge] &&
+                lengths[line.edge] > 0.0f) {
+                float along =
+                    std::max(0.0f, sharedSpan(line.a.x, line.b.x, rect.left,
+                                              rect.right)) +
+                    std::max(0.0f, sharedSpan(line.a.y, line.b.y, rect.top,
+                                              rect.bottom));
+                cost += 8.0f * along / lengths[line.edge];
+            }
+        }
+        return cost;
+    };
+    if (route.chipBeside && free(centeredAt(route.chipAt))) {
+        return centeredAt(route.chipAt);
+    }
+
+    // Points along the line, from its middle outward
+    struct Sample {
+        Point at;
+        bool flat;
+    };
+    const auto& points = route.points;
+    float total = 0.0f;
+    for (size_t p = 1; p < points.size(); p++) {
+        total += std::hypot(points[p].x - points[p - 1].x,
+                            points[p].y - points[p - 1].y);
+    }
+    auto sampleAt = [&](float distance) {
+        for (size_t p = 1; p < points.size(); p++) {
+            float dx = points[p].x - points[p - 1].x;
+            float dy = points[p].y - points[p - 1].y;
+            float length = std::hypot(dx, dy);
+            if (distance <= length || p + 1 == points.size()) {
+                float t = length > 0.0f ? std::min(1.0f, distance / length)
+                                        : 0.0f;
+                return Sample{{points[p - 1].x + dx * t,
+                               points[p - 1].y + dy * t},
+                              std::abs(dy) < std::abs(dx)};
+            }
+            distance -= length;
+        }
+        return Sample{points.front(), true};
+    };
+    std::vector<Sample> samples;
+    float step = std::max(3.0f * scale, total / 2000.0f);
+    float margin = std::min(4.0f * scale, total * 0.5f);
+    for (int k = 0; k < 4002; k++) {
+        float offset = static_cast<float>((k + 1) / 2) * step *
+                       (k % 2 ? 1.0f : -1.0f);
+        if (!(std::abs(offset) <= total * 0.5f)) break;
+        float distance = total * 0.5f + offset;
+        if (distance < margin || distance > total - margin) continue;
+        samples.push_back(sampleAt(distance));
+    }
+    auto beside = [&](const Sample& sample, bool after) {
+        Point center = sample.at;
+        float sign = after ? 1.0f : -1.0f;
+        if (sample.flat) {
+            center.y += sign * (size.h * 0.5f + clear);
+        } else {
+            center.x += sign * (size.w * 0.5f + clear);
+        }
+        return centeredAt(center);
+    };
+    std::vector<mermaid::Rect> candidates;
+    for (const Sample& sample : samples) {
+        candidates.push_back(centeredAt(sample.at));
+    }
+    for (const Sample& sample : samples) {
+        candidates.push_back(beside(sample, true));
+        candidates.push_back(beside(sample, false));
+    }
+    bool found = false;
+    float bestCost = 0.0f;
+    mermaid::Rect best{};
+    for (const auto& rect : candidates) {
+        if (!free(rect)) continue;
+        float cost = covered(rect);
+        if (cost <= 0.0f) return rect;
+        if (!found || cost < bestCost) {
+            found = true;
+            bestCost = cost;
+            best = rect;
+        }
+    }
+    if (found) return best;
+
+    Point middle = samples.empty() ? points.front() : samples.front().at;
+    float ringStep = 6.0f * scale;
+    for (int ring = 1; ring <= 120; ring++) {
+        float reach = static_cast<float>(ring) * ringStep;
+        for (int k = 0; k <= 2 * ring; k++) {
+            float along = static_cast<float>((k + 1) / 2) * ringStep *
+                          (k % 2 ? 1.0f : -1.0f);
+            const Point around[] = {{middle.x + along, middle.y - reach},
+                                    {middle.x + along, middle.y + reach},
+                                    {middle.x - reach, middle.y + along},
+                                    {middle.x + reach, middle.y + along}};
+            for (const Point& center : around) {
+                mermaid::Rect rect = centeredAt(center);
+                if (free(rect)) return rect;
+            }
+        }
+    }
+    float bottom = middle.y;
+    for (const auto& other : solid) bottom = std::max(bottom, other.bottom);
+    return centeredAt({middle.x, bottom + clear * 2.0f + size.h * 0.5f});
+}
+
+// Emits the routed edges: their lines and markers, then every label chip
+// over the lines, each where it overlaps no node, note or other chip
 void emitEdges(std::vector<Prim>& prims, const mermaid::Diagram& diagram,
-               std::vector<RoutedEdge>& routed,
-               const std::vector<EdgeDecor>& decors, const Measure& measure,
+               Scene& scene, const std::vector<EdgeDecor>& decors,
+               const std::vector<Size>& chipSizes, const Measure& measure,
                float scale) {
     TextStyle labelStyle;
     labelStyle.scale = 0.9f;
-    for (size_t i = 0; i < diagram.edges.size(); i++) {
-        auto& points = routed[i].points;
-        if (points.size() < 2) continue;
+    std::vector<mermaid::Rect> solid = scene.boxes;
+    solid.insert(solid.end(), scene.attachments.begin(),
+                 scene.attachments.end());
+    std::vector<EdgeLine> lines;
+    std::vector<Prim> labels;
+    size_t edgeCount = std::min(diagram.edges.size(), scene.routes.size());
+    for (size_t i = 0; i < edgeCount; i++) {
+        auto& points = scene.routes[i].points;
         dedupePoints(points);
         if (points.size() < 2) continue;
         const EdgeDecor& decor =
             i < decors.size() ? decors[i] : EdgeDecor{};
 
+        // Chips keep off the arrowheads and other end marks
+        for (bool atStart : {true, false}) {
+            if ((atStart ? decor.atFrom : decor.atTo) == Marker::None) continue;
+            const Point& tip = atStart ? points.front() : points.back();
+            float reach = (kMarkerDepth + 3.0f) * scale;
+            solid.push_back(
+                {tip.x - reach, tip.y - reach, tip.x + reach, tip.y + reach});
+        }
         emitMarker(prims, points, true, decor.atFrom, scale);
         emitMarker(prims, points, false, decor.atTo, scale);
 
@@ -428,54 +1495,7 @@ void emitEdges(std::vector<Prim>& prims, const mermaid::Diagram& diagram,
             line.strokeWidth = 1.4f * scale;
             line.dashed = decor.dashed;
             prims.push_back(line);
-        }
-
-        const std::string& label =
-            !decor.label.empty() ? decor.label : diagram.edges[i].label;
-        if (!label.empty()) {
-            Size size = measure(label, labelStyle, 0.0f);
-            // Chip at the half-length point of the polyline
-            float total = 0.0f;
-            for (size_t p = 1; p < points.size(); p++) {
-                total += std::abs(points[p].x - points[p - 1].x) +
-                         std::abs(points[p].y - points[p - 1].y);
-            }
-            float remaining = total * 0.5f;
-            float cx = (points.front().x + points.back().x) * 0.5f;
-            float cy = (points.front().y + points.back().y) * 0.5f;
-            for (size_t p = 1; p < points.size(); p++) {
-                float segment =
-                    std::abs(points[p].x - points[p - 1].x) +
-                    std::abs(points[p].y - points[p - 1].y);
-                if (segment >= remaining && segment > 0.0f) {
-                    float t = remaining / segment;
-                    cx = points[p - 1].x + (points[p].x - points[p - 1].x) * t;
-                    cy = points[p - 1].y + (points[p].y - points[p - 1].y) * t;
-                    break;
-                }
-                remaining -= segment;
-            }
-            Prim chip;
-            chip.type = PrimType::RoundRect;
-            chip.radius = 4.0f * scale;
-            chip.x1 = cx - size.w * 0.5f - kEdgeLabelPad * scale;
-            chip.y1 = cy - size.h * 0.5f - 2.0f * scale;
-            chip.x2 = cx + size.w * 0.5f + kEdgeLabelPad * scale;
-            chip.y2 = cy + size.h * 0.5f + 2.0f * scale;
-            chip.fill = Role::Fill;
-            chip.stroke = Role::Muted;
-            chip.strokeWidth = 1.0f * scale;
-            prims.push_back(chip);
-            Prim text;
-            text.type = PrimType::Text;
-            text.text = label;
-            text.style = labelStyle;
-            text.fill = Role::Text;
-            text.x1 = chip.x1;
-            text.y1 = chip.y1;
-            text.x2 = chip.x2;
-            text.y2 = chip.y2;
-            prims.push_back(std::move(text));
+            lines.push_back({i, points[p - 1], points[p]});
         }
 
         // Multiplicity labels near the ends
@@ -508,11 +1528,106 @@ void emitEdges(std::vector<Prim>& prims, const mermaid::Diagram& diagram,
             text.x2 = text.x1 + size.w;
             text.y2 = text.y1 + size.h;
             text.alignH = -1;
-            prims.push_back(std::move(text));
+            solid.push_back({text.x1, text.y1, text.x2, text.y2});
+            labels.push_back(std::move(text));
         };
         endLabel(decor.labelFrom, true);
         endLabel(decor.labelTo, false);
     }
+
+    // Chips, the shortest edges (with the least room) first
+    std::vector<size_t> labeled;
+    for (size_t i = 0; i < edgeCount; i++) {
+        if (i < chipSizes.size() && chipSizes[i].w > 0.0f &&
+            scene.routes[i].points.size() >= 2) {
+            labeled.push_back(i);
+        }
+    }
+    std::stable_sort(labeled.begin(), labeled.end(), [&](size_t a, size_t b) {
+        return pathLength(scene.routes[a].points) <
+               pathLength(scene.routes[b].points);
+    });
+    std::vector<bool> pending(edgeCount, false);
+    std::vector<float> lengths(edgeCount, 0.0f);
+    for (size_t i : labeled) {
+        pending[i] = true;
+        lengths[i] = pathLength(scene.routes[i].points);
+    }
+    for (size_t i : labeled) {
+        pending[i] = false;
+        mermaid::Rect rect = placeChip(scene.routes[i], i, chipSizes[i],
+                                       solid, lines, lengths, pending, scale);
+        solid.push_back(rect);
+        Prim chip;
+        chip.type = PrimType::RoundRect;
+        chip.radius = 4.0f * scale;
+        chip.x1 = rect.left;
+        chip.y1 = rect.top;
+        chip.x2 = rect.right;
+        chip.y2 = rect.bottom;
+        chip.fill = Role::Fill;
+        chip.stroke = Role::Muted;
+        chip.strokeWidth = 1.0f * scale;
+        labels.push_back(chip);
+        Prim text;
+        text.type = PrimType::Text;
+        text.text = edgeLabel(diagram, decors, i);
+        text.style = labelStyle;
+        text.fill = Role::Text;
+        text.x1 = rect.left;
+        text.y1 = rect.top;
+        text.x2 = rect.right;
+        text.y2 = rect.bottom;
+        labels.push_back(std::move(text));
+    }
+    prims.insert(prims.end(), std::make_move_iterator(labels.begin()),
+                 std::make_move_iterator(labels.end()));
+}
+
+// The extent of a list of prims
+mermaid::Rect primBounds(const std::vector<Prim>& prims) {
+    mermaid::Rect bounds{kHuge, kHuge, -kHuge, -kHuge};
+    auto add = [&](float x, float y) {
+        bounds.left = std::min(bounds.left, x);
+        bounds.top = std::min(bounds.top, y);
+        bounds.right = std::max(bounds.right, x);
+        bounds.bottom = std::max(bounds.bottom, y);
+    };
+    for (const auto& prim : prims) {
+        if (prim.type == PrimType::Polygon) {
+            for (const auto& point : prim.pts) add(point.x, point.y);
+        } else if (prim.type == PrimType::Slice) {
+            add(prim.x1 - prim.radius, prim.y1 - prim.radius);
+            add(prim.x1 + prim.radius, prim.y1 + prim.radius);
+        } else {
+            add(prim.x1, prim.y1);
+            add(prim.x2, prim.y2);
+        }
+    }
+    if (bounds.left > bounds.right) return {};
+    return bounds;
+}
+
+void shiftPrims(std::vector<Prim>& prims, float dx, float dy) {
+    for (auto& prim : prims) {
+        prim.x1 += dx;
+        prim.x2 += dx;
+        prim.y1 += dy;
+        prim.y2 += dy;
+        for (auto& point : prim.pts) {
+            point.x += dx;
+            point.y += dy;
+        }
+    }
+}
+
+// Moves the drawing to start at (0, 0), since lanes, chips and notes can
+// lie left of or above the rank layout, and sizes it with a margin
+void fitPrims(Built& built, float margin) {
+    mermaid::Rect bounds = primBounds(built.prims);
+    shiftPrims(built.prims, -bounds.left, -bounds.top);
+    built.width = bounds.right - bounds.left + margin;
+    built.height = bounds.bottom - bounds.top + margin;
 }
 
 }  // namespace
@@ -757,23 +1872,30 @@ Built buildState(std::string_view source, const Measure& measure,
         }
     }
 
-    mermaid::Layout layout = mermaid::layout(
-        acyclicForRanking(graph.diagram), sizes, kNodeGap * scale,
-        kRankGap * scale);
-    if (layout.nodes.size() != graph.diagram.nodes.size()) {
+    // Notes sit beside their states, in room the layout keeps for them
+    TextStyle noteStyle;
+    noteStyle.scale = 0.9f;
+    std::vector<Attachment> attachments;
+    for (const auto& note : notes) {
+        Size size = measure(note.text, noteStyle, 220.0f * scale);
+        attachments.push_back({note.node, note.rightOf,
+                               {size.w + 16.0f * scale,
+                                size.h + 10.0f * scale}});
+    }
+    std::vector<Size> chips =
+        measureChips(graph.diagram, decors, measure, scale);
+    Scene scene = layoutScene(graph.diagram, sizes, attachments, chips,
+                              kNodeGap * scale, kRankGap * scale, scale, true);
+    if (scene.boxes.size() != graph.diagram.nodes.size()) {
         result.error = "Layout failed";
         return result;
     }
-
-    float maxRight = layout.width;
-    float maxBottom = layout.height;
-    auto routed =
-        routeEdges(graph.diagram, layout, scale, maxRight, maxBottom);
-    emitEdges(result.prims, graph.diagram, routed, decors, measure, scale);
+    emitEdges(result.prims, graph.diagram, scene, decors, chips, measure,
+              scale);
 
     // --- nodes ---
     for (size_t i = 0; i < graph.diagram.nodes.size(); i++) {
-        const auto& rect = layout.nodes[i];
+        const auto& rect = scene.boxes[i];
         switch (kinds[i]) {
             case StateKind::Start: {
                 Prim dot;
@@ -900,54 +2022,56 @@ Built buildState(std::string_view source, const Measure& measure,
         }
     }
 
-    // Inline notes beside their nodes
-    TextStyle noteStyle;
-    noteStyle.scale = 0.9f;
-    for (const auto& note : notes) {
-        const auto& rect = layout.nodes[note.node];
-        Size size = measure(note.text, noteStyle, 220.0f * scale);
-        float width = size.w + 16.0f * scale;
-        float height = size.h + 10.0f * scale;
-        float top = (rect.top + rect.bottom) * 0.5f - height * 0.5f;
-        float left = note.rightOf ? rect.right + 16.0f * scale
-                                  : rect.left - 16.0f * scale - width;
+    // Notes in the room kept beside their nodes, on a dashed link
+    for (size_t n = 0; n < notes.size(); n++) {
+        const auto& rect = scene.boxes[notes[n].node];
+        const auto& note = scene.attachments[n];
         Prim box;
         box.type = PrimType::Rect;
-        box.x1 = left;
-        box.y1 = top;
-        box.x2 = left + width;
-        box.y2 = top + height;
+        box.x1 = note.left;
+        box.y1 = note.top;
+        box.x2 = note.right;
+        box.y2 = note.bottom;
         box.fill = Role::AccentSoft;
         box.stroke = Role::Stroke;
         box.strokeWidth = 1.0f * scale;
         result.prims.push_back(box);
         Prim text;
         text.type = PrimType::Text;
-        text.text = note.text;
+        text.text = notes[n].text;
         text.style = noteStyle;
         text.fill = Role::Text;
-        text.x1 = left + 8.0f * scale;
-        text.y1 = top + 5.0f * scale;
-        text.x2 = left + width - 8.0f * scale;
-        text.y2 = top + height - 5.0f * scale;
+        text.x1 = note.left + 8.0f * scale;
+        text.y1 = note.top + 5.0f * scale;
+        text.x2 = note.right - 8.0f * scale;
+        text.y2 = note.bottom - 5.0f * scale;
         result.prims.push_back(std::move(text));
-        Prim connectorLine;
-        connectorLine.type = PrimType::Line;
-        connectorLine.x1 = note.rightOf ? rect.right : rect.left;
-        connectorLine.y1 = (rect.top + rect.bottom) * 0.5f;
-        connectorLine.x2 = note.rightOf ? left : left + width;
-        connectorLine.y2 = top + height * 0.5f;
-        connectorLine.stroke = Role::Muted;
-        connectorLine.strokeWidth = 1.0f * scale;
-        connectorLine.dashed = true;
-        result.prims.push_back(connectorLine);
-        maxRight = std::max(maxRight, left + width);
-        maxBottom = std::max(maxBottom, top + height);
+        Prim link;
+        link.type = PrimType::Line;
+        float nodeX = (rect.left + rect.right) * 0.5f;
+        float nodeY = (rect.top + rect.bottom) * 0.5f;
+        float noteX = (note.left + note.right) * 0.5f;
+        float noteY = (note.top + note.bottom) * 0.5f;
+        if (note.left >= rect.right || note.right <= rect.left) {
+            bool right = note.left >= rect.right;
+            link.x1 = right ? rect.right : rect.left;
+            link.y1 = nodeY;
+            link.x2 = right ? note.left : note.right;
+            link.y2 = noteY;
+        } else {
+            bool below = note.top >= rect.bottom;
+            link.x1 = nodeX;
+            link.y1 = below ? rect.bottom : rect.top;
+            link.x2 = noteX;
+            link.y2 = below ? note.top : note.bottom;
+        }
+        link.stroke = Role::Muted;
+        link.strokeWidth = 1.0f * scale;
+        link.dashed = true;
+        result.prims.push_back(link);
     }
 
-    result.width = maxRight + 8.0f * scale;
-    result.height = maxBottom + 8.0f * scale;
-    normalizeLeft(result);
+    fitPrims(result, 8.0f * scale);
     result.ok = true;
     return result;
 }
@@ -1303,22 +2427,20 @@ Built buildClass(std::string_view source, const Measure& measure,
                     height};
     }
 
-    mermaid::Layout layout = mermaid::layout(
-        acyclicForRanking(graph.diagram), sizes, kNodeGap * scale,
-        (kRankGap + 12.0f) * scale);
-    if (layout.nodes.size() != graph.diagram.nodes.size()) {
+    std::vector<Size> chips =
+        measureChips(graph.diagram, decors, measure, scale);
+    Scene scene = layoutScene(graph.diagram, sizes, {}, chips,
+                              kNodeGap * scale, (kRankGap + 12.0f) * scale,
+                              scale, false);
+    if (scene.boxes.size() != graph.diagram.nodes.size()) {
         result.error = "Layout failed";
         return result;
     }
-
-    float maxRight = layout.width;
-    float maxBottom = layout.height;
-    auto routed =
-        routeEdges(graph.diagram, layout, scale, maxRight, maxBottom);
-    emitEdges(result.prims, graph.diagram, routed, decors, measure, scale);
+    emitEdges(result.prims, graph.diagram, scene, decors, chips, measure,
+              scale);
 
     for (size_t i = 0; i < graph.diagram.nodes.size(); i++) {
-        const auto& rect = layout.nodes[i];
+        const auto& rect = scene.boxes[i];
         const ClassMembers* classMembers = nullptr;
         auto found = members.find(i);
         if (found != members.end()) classMembers = &found->second;
@@ -1411,15 +2533,16 @@ Built buildClass(std::string_view source, const Measure& measure,
         noteStyle.scale = 0.85f;
         float notePad = 8.0f * scale;
         float noteWrap = 240.0f * scale;
-        float floatCursorY = maxBottom + 16.0f * scale;
+        mermaid::Rect drawn = primBounds(result.prims);
+        float floatCursorY = drawn.bottom + 16.0f * scale;
         for (const auto& note : notes) {
             Size size = measure(note.text, noteStyle, noteWrap);
             float width = std::min(size.w, noteWrap) + notePad * 2.0f;
             float height = size.h + notePad * 2.0f;
             float x, top;
             if (note.target != SIZE_MAX &&
-                note.target < layout.nodes.size()) {
-                const auto& rect = layout.nodes[note.target];
+                note.target < scene.boxes.size()) {
+                const auto& rect = scene.boxes[note.target];
                 float centerX = (rect.left + rect.right) * 0.5f;
                 x = centerX - width * 0.5f;
                 top = rect.bottom + 18.0f * scale;
@@ -1434,7 +2557,7 @@ Built buildClass(std::string_view source, const Measure& measure,
                 link.dashed = true;
                 result.prims.push_back(std::move(link));
             } else {
-                x = 0.0f;
+                x = drawn.left;
                 top = floatCursorY;
                 floatCursorY += height + 10.0f * scale;
             }
@@ -1461,14 +2584,10 @@ Built buildClass(std::string_view source, const Measure& measure,
             text.x2 = x + width - notePad;
             text.y2 = top + height - notePad;
             result.prims.push_back(std::move(text));
-            maxRight = std::max(maxRight, x + width);
-            maxBottom = std::max(maxBottom, top + height);
         }
     }
 
-    result.width = maxRight + 8.0f * scale;
-    result.height = maxBottom + 8.0f * scale;
-    normalizeLeft(result);
+    fitPrims(result, 8.0f * scale);
     result.ok = true;
     return result;
 }
@@ -1723,22 +2842,20 @@ Built buildEr(std::string_view source, const Measure& measure, float scale) {
                     height};
     }
 
-    mermaid::Layout layout = mermaid::layout(
-        acyclicForRanking(graph.diagram), sizes, (kNodeGap + 14.0f) * scale,
-        (kRankGap + 8.0f) * scale);
-    if (layout.nodes.size() != graph.diagram.nodes.size()) {
+    std::vector<Size> chips =
+        measureChips(graph.diagram, decors, measure, scale);
+    Scene scene = layoutScene(graph.diagram, sizes, {}, chips,
+                              (kNodeGap + 14.0f) * scale,
+                              (kRankGap + 8.0f) * scale, scale, true);
+    if (scene.boxes.size() != graph.diagram.nodes.size()) {
         result.error = "Layout failed";
         return result;
     }
-
-    float maxRight = layout.width;
-    float maxBottom = layout.height;
-    auto routed =
-        routeEdges(graph.diagram, layout, scale, maxRight, maxBottom);
-    emitEdges(result.prims, graph.diagram, routed, decors, measure, scale);
+    emitEdges(result.prims, graph.diagram, scene, decors, chips, measure,
+              scale);
 
     for (size_t i = 0; i < graph.diagram.nodes.size(); i++) {
-        const auto& rect = layout.nodes[i];
+        const auto& rect = scene.boxes[i];
         const MeasuredEntity& entity = measured[i];
 
         Prim box;
@@ -1819,9 +2936,7 @@ Built buildEr(std::string_view source, const Measure& measure, float scale) {
         }
     }
 
-    result.width = maxRight + 8.0f * scale;
-    result.height = maxBottom + 8.0f * scale;
-    normalizeLeft(result);
+    fitPrims(result, 8.0f * scale);
     result.ok = true;
     return result;
 }
