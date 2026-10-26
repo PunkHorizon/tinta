@@ -50,35 +50,14 @@ jobs:
             - Portable: download `tinta.exe` below and run it (SmartScreen may ask: "More info", then "Run anyway")
             - Optionally run `tinta.exe /register` to register Markdown, Mermaid and PlantUML files
 
-            ### Go to line (#276)
-            - Ctrl+G opens a prompt at the top of the editor or the reading view: type a line number and press Enter. The editor puts the caret at the start of the line; the reading view scrolls to where it is drawn (#276)
-            - Requested by @derek-price (#276)
-
-            ### Russian interface (#274)
-            - The interface is available in Russian, chosen automatically on Russian Windows or in Settings → General → Language (#274)
-            - Contributed by @NorthMause (#274)
-
-            ### Keep deleted files in memory (#275)
-            - An opt-in setting in Settings → General keeps a deleted file's last content readable and editable in its tab until the tab or Tinta closes; saving it asks for a place with Save As (#275)
-            - Contributed by @NorthMause (#275)
-
-            ### Notifications and tabs (#272, #273)
-            - Settings → Appearance → Show notifications turns off the messages that go away on their own: copy confirmations, "Saved", status messages and the edit-mode hints. Warnings, errors and messages that need an answer still show (#273)
-            - The mouse wheel over the tab strip switches to the previous or next tab, wrapping at both ends; Ctrl+wheel still zooms (#272)
-            - Requested by @megayu (#272, #273)
-
-            ### Inline code without a box (#278)
-            - `inlinecodebackground=` in `themes.ini` sets the box behind inline code: `none` drops it, a colour gives it its own. Code blocks keep `codebackground`, and the HTML and Word exports and printing follow it (#278)
-            - Requested by @Knewhenry (#278)
+            A fix release for 3.9.2. For what is new in 3.9 (go to line with Ctrl+G, the Russian interface, keeping deleted files in memory and more), see the [v3.9.2 notes](https://github.com/oipoistar/tinta/releases/tag/v3.9.2).
 
             ### Fixed
-            - Mermaid flowchart labels in double quotes can run over several lines; such a diagram showed its source before. Quotes around edge text no longer show in the label, and a long one-word edge label stays on one line. Reported by @derek-price (#281)
-            - Beside the preview, the editor's scrollbar shows the arrow pointer, and the preview's scrollbar can be dragged, moving both panes. Reported by @a86022 (#280)
-            - A document left for a new note, the start page or an untitled tab, or reopened after its last tab closed, comes back where it was read instead of at an older place. Reported by @aweib888 (#279)
-            - A single `~` between digits or Chinese, Japanese or Korean characters, as in `50~100mm`, reads as a range instead of starting a subscript. Reported by @aweib888 (#277)
-            - In files with Windows (CRLF) line endings, E opens the editor at the reading position instead of above it. Reported by @derek-price (#267)
-            - Opening Help no longer centres the text of the contents panel, the search results and the tab card. Reported by @megayu (#270)
-            - The first and last tabs show the active tab's halo on both sides. Reported by @megayu (#271)
+            - Ctrl+G's go-to-line prompt takes the line number again: in 3.9.2 nothing could be typed into it, and clicking it closed it. Reported by @derek-price (#282)
+            - Mermaid state diagrams draw composite states, `state Name { … }`, nested and with concurrent regions split by `--`; such a diagram showed its source before
+            - In Mermaid state, class and ER diagrams, edges no longer run through other boxes, and edge labels and notes no longer cover them, in every direction
+            - Mermaid C4 relationship labels sit clear of the boxes and of each other instead of covering the boxes' text
+            - Mermaid flowcharts draw the asymmetric `id>text]` shape and read longer links such as `--->`, `===>` and `-..->`; both drew wrong nodes before
 
             ### What's included
             - Export as HTML, DOCX, or PDF, plus optional Pandoc formats

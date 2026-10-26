@@ -1,5 +1,14 @@
 # Changelog
 
+## [v3.9.3] - 2026-10-26
+
+### Fixed
+- Ctrl+G's go-to-line prompt takes the line number again: in 3.9.2 nothing could be typed into it, and clicking it closed it. Reported by @derek-price (#282)
+- Mermaid state diagrams draw composite states, `state Name { … }`, nested and with concurrent regions split by `--`; such a diagram showed its source before
+- In Mermaid state, class and ER diagrams, edges no longer run through other boxes, and edge labels and notes no longer cover them, in every direction
+- Mermaid C4 relationship labels sit clear of the boxes and of each other instead of covering the boxes' text
+- Mermaid flowcharts draw the asymmetric `id>text]` shape and read longer links such as `--->`, `===>` and `-..->`; both drew wrong nodes before
+
 ## [v3.9.2] - 2026-10-26
 
 ### Added
