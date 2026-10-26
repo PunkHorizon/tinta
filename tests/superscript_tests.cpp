@@ -229,8 +229,12 @@ void learnCopies(App& app, const std::filesystem::path& dir) {
                   "Keep editing retains the entire Learn copy");
 
             // Supply the path a Save As selection would return; do not open
-            // a native modal dialog in the unattended test executable.
+            // a native modal dialog in the unattended test executable. The
+            // file exists, as one Save As picked would: a save to a path with
+            // no file behind it asks for a new one (#275), and that dialog
+            // waits for an answer nobody gives here.
             const auto saved = dir / (std::string(profile) + "-learn-" + std::to_string(card) + ".md");
+            std::ofstream(saved, std::ios::binary).close();
             app.currentFile = toUtf8(saved.wstring());
             saveEditorFile(app, app.hwnd);
             check(!app.editorDirty && read(saved) == toUtf8(edited), "Learn copy saves through the normal file writer");
