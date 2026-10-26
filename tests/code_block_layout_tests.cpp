@@ -1,6 +1,8 @@
+#include "c4_label_checks.h"
 #include "d2d_init.h"
 #include "document.h"
 #include "editor.h"
+#include "export.h"
 #include "input.h"
 #include "render.h"
 #include "utils.h"
@@ -147,6 +149,31 @@ void testMermaidMultilineLabels(App& app) {
     check(found >= 25, "the diagrams' labels are laid out (" + std::to_string(found) + ")");
 }
 
+// C4 relation labels, measured with the app's fonts: every diagram of the
+// mixed fixture draws, and each label stays clear of the boxes, frames,
+// text, arrowheads and other labels, on its own relation's line
+void testMermaidC4Labels(App& app) {
+    std::ifstream file(TINTA_MERMAID_C4_FIXTURE, std::ios::binary);
+    check(file.good(), "C4 label fixture is available");
+    std::string source((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    app.root = app.parser.parse(source).root;
+    layoutDocument(app);
+    ensureLayoutComplete(app);
+    const float scale = app.contentScale * app.zoomFactor;
+    int diagrams = 0;
+    for (const auto& block : app.codeBlocks) {
+        if (!block.isDiagram) continue;
+        ++diagrams;
+        const std::string fence = toUtf8(block.codeText);
+        const auto built = buildDiagramPrims(app, fence, scale);
+        for (const auto& problem : c4checks::labelProblems(built, fence, scale))
+            check(false, "C4 diagram " + std::to_string(diagrams) + ": " + problem);
+    }
+    check(diagrams == 8, "the fixture's eight C4 diagrams draw");
+    check(app.docText.find(L"mermaid fences above: 8") != std::wstring::npos,
+          "text after the C4 diagrams lays out");
+}
+
 std::wstring clipboardText(HWND window) {
     std::wstring result;
     // Clipboard-history tools may briefly hold a newly copied value
@@ -290,6 +317,7 @@ int main() {
                     testMixedFixture(app);
                     testMermaidFrontMatter(app);
                     testMermaidMultilineLabels(app);
+                    testMermaidC4Labels(app);
                 }
             }
         }

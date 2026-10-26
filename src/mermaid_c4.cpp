@@ -499,6 +499,10 @@ struct C4Boundary {
     std::vector<std::pair<bool, size_t>> members;
     size_t parent = SIZE_MAX;
     float x = 0, y = 0, width = 0, height = 0;
+    // Space after each member in its row and after each row, widened where
+    // relation labels sit; the rows as placed
+    std::vector<float> gapAfter, rowGapAfter;
+    std::vector<float> rowTop, rowHeight;
 };
 
 struct C4Rel {
@@ -508,6 +512,51 @@ struct C4Rel {
     std::string techn;
     bool bidirectional = false;
 };
+
+// Free space that holds relation labels: between two members of a row, or
+// between two rows. Its labels sit in tiers across it, each tier as deep as
+// the largest label
+struct C4Gap {
+    size_t boundary = 0;
+    bool betweenRows = false;
+    size_t index = 0;   // the member or row it follows
+    float extent = 0;   // the largest label, measured across the gap
+    int labels = 0;     // labels that sit in it, which bound its tiers
+    int tiers = 1;
+};
+
+struct C4Box {
+    float x1 = 0, y1 = 0, x2 = 0, y2 = 0;
+};
+
+C4Box inflate(const C4Box& box, float by) {
+    return {box.x1 - by, box.y1 - by, box.x2 + by, box.y2 + by};
+}
+
+bool overlaps(const C4Box& a, const C4Box& b) {
+    return a.x1 < b.x2 && b.x1 < a.x2 && a.y1 < b.y2 && b.y1 < a.y2;
+}
+
+// Does the segment p-q pass through the box? (Liang-Barsky)
+bool crosses(Point p, Point q, const C4Box& box) {
+    float dx = q.x - p.x, dy = q.y - p.y;
+    const float edges[4][2] = {{-dx, p.x - box.x1},
+                               {dx, box.x2 - p.x},
+                               {-dy, p.y - box.y1},
+                               {dy, box.y2 - p.y}};
+    float t0 = 0.0f, t1 = 1.0f;
+    for (const auto& edge : edges) {
+        if (std::abs(edge[0]) < 1e-6f) {
+            if (edge[1] < 0.0f) return false;
+            continue;
+        }
+        float t = edge[1] / edge[0];
+        if (edge[0] < 0.0f) t0 = std::max(t0, t);
+        else t1 = std::min(t1, t);
+        if (t0 > t1) return false;
+    }
+    return true;
+}
 
 struct C4Colors {
     float bgR, bgG, bgB;
@@ -537,6 +586,8 @@ C4Colors c4Palette(const C4Element& element) {
 
 constexpr float kC4ElementWidth = 200.0f;
 constexpr int kC4PerRow = 3;
+// Layout passes that may widen a gap for a label that did not fit
+constexpr int kC4LabelPasses = 12;
 
 }  // namespace
 
@@ -748,40 +799,70 @@ Built buildC4(std::string_view source, const Measure& measure, float scale) {
     float memberGapY = 26.0f * scale;
     float boundaryPad = 18.0f * scale;
     float boundaryLabelSpace = 26.0f * scale;
+    // Relation labels keep this far from the boxes, which leaves their
+    // arrowheads in view, and labelGap from frames, captions and each other
+    float labelClear = 16.0f * scale;
+    float labelGap = 6.0f * scale;
+
+    // Where each element and boundary sits: holding boundary, member index
+    std::vector<std::pair<size_t, size_t>> elementSlot(elements.size());
+    std::vector<std::pair<size_t, size_t>> boundarySlot(boundaries.size());
+    for (size_t b = 0; b < boundaries.size(); b++) {
+        auto& boundary = boundaries[b];
+        for (size_t i = 0; i < boundary.members.size(); i++) {
+            auto member = boundary.members[i];
+            (member.first ? elementSlot : boundarySlot)[member.second] = {b, i};
+        }
+        boundary.gapAfter.assign(boundary.members.size(), memberGapX);
+        boundary.rowGapAfter.assign(
+            (boundary.members.size() + kC4PerRow - 1) / kC4PerRow, memberGapY);
+    }
 
     struct SizeF {
         float w = 0, h = 0;
     };
+    auto memberSize = [&](const C4Boundary& boundary, size_t i) -> SizeF {
+        auto member = boundary.members[i];
+        if (member.first) {
+            return {elements[member.second].width,
+                    elements[member.second].height};
+        }
+        return {boundaries[member.second].width,
+                boundaries[member.second].height};
+    };
+    auto memberLeft = [&](const C4Boundary& boundary, size_t i) {
+        auto member = boundary.members[i];
+        return member.first ? elements[member.second].x
+                            : boundaries[member.second].x;
+    };
+    // Members [start, end) of a row side by side, with the gaps between
+    auto rowExtent = [&](const C4Boundary& boundary, size_t start,
+                         size_t end) {
+        SizeF extent;
+        for (size_t i = start; i < end; i++) {
+            SizeF size = memberSize(boundary, i);
+            extent.w += size.w + (i + 1 < end ? boundary.gapAfter[i] : 0.0f);
+            extent.h = std::max(extent.h, size.h);
+        }
+        return extent;
+    };
+
     std::function<SizeF(size_t)> measureBoundary =
         [&](size_t index) -> SizeF {
         auto& boundary = boundaries[index];
-        // Members flow in rows in declaration order
-        std::vector<SizeF> members;
         for (const auto& member : boundary.members) {
-            if (member.first) {
-                members.push_back({elements[member.second].width,
-                                   elements[member.second].height});
-            } else {
-                members.push_back(measureBoundary(member.second));
-            }
+            if (!member.first) measureBoundary(member.second);
         }
+        // Members flow in rows in declaration order
         float width = 0.0f, height = 0.0f;
-        float rowWidth = 0.0f, rowHeight = 0.0f;
-        int inRow = 0;
-        for (const auto& member : members) {
-            if (inRow == kC4PerRow) {
-                width = std::max(width, rowWidth - memberGapX);
-                height += rowHeight + memberGapY;
-                rowWidth = 0.0f;
-                rowHeight = 0.0f;
-                inRow = 0;
-            }
-            rowWidth += member.w + memberGapX;
-            rowHeight = std::max(rowHeight, member.h);
-            inRow++;
+        size_t count = boundary.members.size();
+        for (size_t start = 0; start < count; start += kC4PerRow) {
+            size_t end = std::min(start + kC4PerRow, count);
+            SizeF row = rowExtent(boundary, start, end);
+            width = std::max(width, row.w);
+            height += row.h;
+            if (end < count) height += boundary.rowGapAfter[start / kC4PerRow];
         }
-        width = std::max(width, rowWidth - memberGapX);
-        height += rowHeight;
         SizeF size;
         if (index == 0) {
             size = {width, height};
@@ -803,72 +884,537 @@ Built buildC4(std::string_view source, const Measure& measure, float scale) {
         float innerY = index == 0 ? y : y + boundaryPad;
         float innerWidth =
             index == 0 ? boundary.width : boundary.width - boundaryPad * 2.0f;
-
-        struct Member {
-            bool isElement;
-            size_t index;
-            float w, h;
-        };
-        std::vector<Member> members;
-        for (const auto& member : boundary.members) {
-            if (member.first) {
-                members.push_back({true, member.second,
-                                   elements[member.second].width,
-                                   elements[member.second].height});
-            } else {
-                members.push_back({false, member.second,
-                                   boundaries[member.second].width,
-                                   boundaries[member.second].height});
-            }
-        }
+        boundary.rowTop.clear();
+        boundary.rowHeight.clear();
         float rowTop = innerY;
-        size_t start = 0;
-        while (start < members.size()) {
-            size_t end = std::min(start + kC4PerRow, members.size());
-            float rowWidth = 0.0f, rowHeight = 0.0f;
+        size_t count = boundary.members.size();
+        for (size_t start = 0; start < count; start += kC4PerRow) {
+            size_t end = std::min(start + kC4PerRow, count);
+            SizeF row = rowExtent(boundary, start, end);
+            float cursor = innerX + (innerWidth - row.w) * 0.5f;
             for (size_t i = start; i < end; i++) {
-                rowWidth += members[i].w + memberGapX;
-                rowHeight = std::max(rowHeight, members[i].h);
-            }
-            rowWidth -= memberGapX;
-            float cursor = innerX + (innerWidth - rowWidth) * 0.5f;
-            for (size_t i = start; i < end; i++) {
-                float memberY = rowTop + (rowHeight - members[i].h) * 0.5f;
-                if (members[i].isElement) {
-                    elements[members[i].index].x = cursor;
-                    elements[members[i].index].y = memberY;
+                SizeF size = memberSize(boundary, i);
+                float memberY = rowTop + (row.h - size.h) * 0.5f;
+                auto member = boundary.members[i];
+                if (member.first) {
+                    elements[member.second].x = cursor;
+                    elements[member.second].y = memberY;
                 } else {
-                    placeBoundary(members[i].index, cursor, memberY);
+                    placeBoundary(member.second, cursor, memberY);
                 }
-                cursor += members[i].w + memberGapX;
+                cursor += size.w + (i + 1 < end ? boundary.gapAfter[i] : 0.0f);
             }
-            rowTop += rowHeight + memberGapY;
-            start = end;
+            boundary.rowTop.push_back(rowTop);
+            boundary.rowHeight.push_back(row.h);
+            if (end < count) {
+                rowTop += row.h + boundary.rowGapAfter[start / kC4PerRow];
+            }
         }
     };
 
-    SizeF rootSize = measureBoundary(0);
+    // Relations: their elements and their label chips' sizes
+    struct C4Link {
+        size_t from = 0, to = 0;
+        size_t loop = 0;        // among the element's loops to itself
+        size_t gap = SIZE_MAX;  // the gap its label sits in
+        Size labelSize, technSize;
+        std::string technText;
+        float chipW = 0, chipH = 0;  // no chip without a label
+        std::vector<std::pair<Point, Point>> segments;
+        Point a, b;  // the stretch its label rides on
+        bool placed = false;
+        bool leader = false;  // placed off the diagram, joined by a leader
+        C4Box chip;
+    };
+    auto findElement = [&](const std::string& alias) -> size_t {
+        for (size_t i = 0; i < elements.size(); i++) {
+            if (elements[i].alias == alias) return i;
+        }
+        return SIZE_MAX;
+    };
+    TextStyle relStyle;
+    relStyle.scale = 0.78f;
+    TextStyle relTechnStyle;
+    relTechnStyle.scale = 0.7f;
+    relTechnStyle.italic = true;
+    float relWrap = 150.0f * scale;
+    std::vector<C4Link> links(rels.size());
+    for (size_t r = 0; r < rels.size(); r++) {
+        auto& link = links[r];
+        link.from = findElement(rels[r].from);
+        link.to = findElement(rels[r].to);
+        if (link.from == SIZE_MAX || link.to == SIZE_MAX) {
+            result.error = "Unknown alias in relation";
+            return result;
+        }
+        if (link.from == link.to) {
+            for (size_t earlier = 0; earlier < r; earlier++) {
+                if (links[earlier].from == link.from &&
+                    links[earlier].to == link.from) {
+                    link.loop++;
+                }
+            }
+        }
+        if (rels[r].label.empty()) continue;
+        link.labelSize = measure(rels[r].label, relStyle, relWrap);
+        float textW = std::min(link.labelSize.w, relWrap);
+        if (!rels[r].techn.empty()) {
+            link.technText = "[" + rels[r].techn + "]";
+            link.technSize = measure(link.technText, relTechnStyle, relWrap);
+            textW = std::max(textW, link.technSize.w);
+        }
+        link.chipW = textW + 10.0f * scale;
+        link.chipH = link.labelSize.h + link.technSize.h + 4.0f * scale;
+    }
+
+    // Each label's gap, in the innermost boundary that holds both elements:
+    // beside the member the relation leaves, toward the member it reaches,
+    // in their row or between their rows
+    std::vector<C4Gap> gaps;
+    auto chainOf = [&](size_t element) {
+        std::vector<std::pair<size_t, size_t>> chain = {elementSlot[element]};
+        while (chain.back().first != 0) {
+            chain.push_back(boundarySlot[chain.back().first]);
+        }
+        return chain;
+    };
+    for (auto& link : links) {
+        if (link.chipW <= 0.0f) continue;
+        C4Gap home;
+        home.index = SIZE_MAX;
+        float extent = link.chipW;
+        if (link.from == link.to) {
+            // A loop off the element's right side, into the gap after it
+            auto slot = elementSlot[link.from];
+            if ((slot.second + 1) % kC4PerRow != 0 &&
+                slot.second + 1 < boundaries[slot.first].members.size()) {
+                home.boundary = slot.first;
+                home.index = slot.second;
+            }
+        } else {
+            auto chainA = chainOf(link.from);
+            auto chainB = chainOf(link.to);
+            size_t memberA = 0, memberB = 0;
+            for (const auto& slotA : chainA) {
+                auto slotB = std::find_if(
+                    chainB.begin(), chainB.end(),
+                    [&](const auto& slot) { return slot.first == slotA.first; });
+                if (slotB == chainB.end()) continue;
+                home.boundary = slotA.first;
+                memberA = slotA.second;
+                memberB = slotB->second;
+                break;
+            }
+            size_t rowA = memberA / kC4PerRow, rowB = memberB / kC4PerRow;
+            if (rowA == rowB) {
+                home.index = memberA < memberB ? memberA : memberA - 1;
+            } else {
+                home.betweenRows = true;
+                home.index = rowA < rowB ? rowA : rowA - 1;
+                extent = link.chipH;
+            }
+        }
+        if (home.index == SIZE_MAX) continue;
+        for (size_t g = 0; g < gaps.size() && link.gap == SIZE_MAX; g++) {
+            if (gaps[g].boundary == home.boundary &&
+                gaps[g].betweenRows == home.betweenRows &&
+                gaps[g].index == home.index) {
+                link.gap = g;
+            }
+        }
+        if (link.gap == SIZE_MAX) {
+            link.gap = gaps.size();
+            gaps.push_back(home);
+        }
+        gaps[link.gap].extent = std::max(gaps[link.gap].extent, extent);
+        gaps[link.gap].labels++;
+    }
+
     float top = 4.0f * scale;
-    float diagramWidth = rootSize.w;
+    TextStyle titleStyle;
+    titleStyle.bold = true;
+    titleStyle.scale = 1.1f;
+    Size titleSize;
     if (!title.empty()) {
-        TextStyle titleStyle;
-        titleStyle.bold = true;
-        titleStyle.scale = 1.1f;
-        Size titleSize = measure(title, titleStyle, 0.0f);
-        diagramWidth = std::max(diagramWidth, titleSize.w);
+        titleSize = measure(title, titleStyle, 0.0f);
+        top += titleSize.h + 14.0f * scale;
+    }
+    TextStyle boundaryStyle;
+    boundaryStyle.bold = true;
+    boundaryStyle.scale = 0.85f;
+    auto caption = [&](const C4Boundary& boundary) {
+        std::string text = boundary.label;
+        if (!boundary.type.empty()) text += " [" + boundary.type + "]";
+        return text;
+    };
+    auto captionBox = [&](const C4Boundary& boundary) {
+        Size size = measure(caption(boundary), boundaryStyle, boundary.width);
+        return C4Box{boundary.x + 8.0f * scale,
+                     boundary.y + boundary.height - size.h - 4.0f * scale,
+                     boundary.x + boundary.width - 8.0f * scale,
+                     boundary.y + boundary.height - 4.0f * scale};
+    };
+    auto center = [&](size_t index) {
+        const auto& element = elements[index];
+        return Point{element.x + element.width * 0.5f,
+                     element.y + element.height * 0.5f};
+    };
+    // Do two relations' lines run along each other: nearly parallel, and
+    // touching over a stretch of both? Between the same two elements they
+    // do, and also when one passes behind the box the other ends at
+    auto alongside = [&](const C4Link& one, const C4Link& two) {
+        Point p = center(one.from), q = center(one.to);
+        Point r = center(two.from), s = center(two.to);
+        float length = std::hypot(q.x - p.x, q.y - p.y);
+        float other = std::hypot(s.x - r.x, s.y - r.y);
+        if (length < 1.0f || other < 1.0f) return false;
+        float ux = (q.x - p.x) / length, uy = (q.y - p.y) / length;
+        if (std::abs(ux * (s.y - r.y) - uy * (s.x - r.x)) > 0.08f * other) {
+            return false;
+        }
+        // The second line's ends along the first, and across it
+        float a0 = (r.x - p.x) * ux + (r.y - p.y) * uy;
+        float a1 = (s.x - p.x) * ux + (s.y - p.y) * uy;
+        float d0 = (r.y - p.y) * ux - (r.x - p.x) * uy;
+        float d1 = (s.y - p.y) * ux - (s.x - p.x) * uy;
+        float low = std::max(0.0f, std::min(a0, a1));
+        float high = std::min(length, std::max(a0, a1));
+        if (high - low < 30.0f * scale) return false;
+        float e0 = d0 + (d1 - d0) * (low - a0) / (a1 - a0);
+        float e1 = d0 + (d1 - d0) * (high - a0) / (a1 - a0);
+        return (e0 < 0.0f) != (e1 < 0.0f) ||
+               std::min(std::abs(e0), std::abs(e1)) < 4.0f * scale;
+    };
+
+    // Lines between the element boxes. Lines that would run along each
+    // other share a corridor, where they take lanes side by side, far
+    // enough apart for their labels; a relation to its own element loops
+    // out of the right side
+    auto route = [&]() {
+        size_t count = links.size();
+        std::vector<size_t> corridor(count);
+        for (size_t i = 0; i < count; i++) corridor[i] = i;
+        auto corridorOf = [&](size_t i) {
+            while (corridor[i] != i) i = corridor[i] = corridor[corridor[i]];
+            return i;
+        };
+        for (size_t i = 0; i < count; i++) {
+            for (size_t j = i + 1; j < count; j++) {
+                if (links[i].from == links[i].to ||
+                    links[j].from == links[j].to) {
+                    continue;
+                }
+                if (alongside(links[i], links[j])) {
+                    corridor[corridorOf(j)] = corridorOf(i);
+                }
+            }
+        }
+        for (size_t i = 0; i < count; i++) {
+            auto& link = links[i];
+            const auto& from = elements[link.from];
+            const auto& to = elements[link.to];
+            link.placed = false;
+            link.leader = false;
+            if (link.from == link.to) {
+                // High on the side, above the lines to the neighbours
+                float right = from.x + from.width;
+                float reach = (22.0f + link.loop * 12.0f) * scale;
+                float half = (8.0f + link.loop * 6.0f) * scale;
+                float midY = from.y + std::min(from.height * 0.5f,
+                                               half + 6.0f * scale +
+                                                   from.height * 0.1f);
+                Point out{right, midY - half}, far{right + reach, midY - half};
+                Point turn{right + reach, midY + half}, back{right, midY + half};
+                link.segments = {{out, far}, {far, turn}, {turn, back}};
+                link.a = far;
+                link.b = turn;
+                continue;
+            }
+            std::vector<size_t> lanes;
+            for (size_t j = 0; j < count; j++) {
+                if (corridorOf(j) == corridorOf(i)) lanes.push_back(j);
+            }
+            Point start = center(link.from), end = center(link.to);
+            if (lanes.size() > 1) {
+                // Lanes across the corridor's first line
+                const auto& first = links[lanes.front()];
+                Point p = center(first.from), q = center(first.to);
+                float dx = q.x - p.x, dy = q.y - p.y;
+                if (dx < 0.0f || (dx == 0.0f && dy < 0.0f)) {
+                    dx = -dx;
+                    dy = -dy;
+                }
+                float length = std::hypot(dx, dy);
+                float nx = -dy / length, ny = dx / length;
+                float spacing = 10.0f * scale;
+                // Every lane enters its boxes away from their corners
+                float reach = 1e9f;
+                float inset = 12.0f * scale;
+                for (size_t lane : lanes) {
+                    const auto& other = links[lane];
+                    if (other.chipW > 0.0f) {
+                        spacing = std::max(spacing,
+                                           std::abs(nx) * other.chipW +
+                                               std::abs(ny) * other.chipH +
+                                               labelGap);
+                    }
+                    for (size_t element : {other.from, other.to}) {
+                        const auto& box = elements[element];
+                        if (std::abs(nx) > 0.001f) {
+                            reach = std::min(reach, (box.width * 0.5f - inset) /
+                                                        std::abs(nx));
+                        }
+                        if (std::abs(ny) > 0.001f) {
+                            reach = std::min(reach, (box.height * 0.5f - inset) /
+                                                        std::abs(ny));
+                        }
+                    }
+                }
+                spacing = std::min(spacing, 2.0f * std::max(reach, 0.0f) /
+                                                (lanes.size() - 1));
+                size_t lane = static_cast<size_t>(
+                    std::find(lanes.begin(), lanes.end(), i) - lanes.begin());
+                float offset = (lane - (lanes.size() - 1) * 0.5f) * spacing;
+                start = {start.x + nx * offset, start.y + ny * offset};
+                end = {end.x + nx * offset, end.y + ny * offset};
+            }
+            link.a = clipRect(start.x, start.y, end.x, end.y, from.x, from.y,
+                              from.x + from.width, from.y + from.height);
+            link.b = clipRect(end.x, end.y, start.x, start.y, to.x, to.y,
+                              to.x + to.width, to.y + to.height);
+            link.segments = {{link.a, link.b}};
+        }
+    };
+
+    // A gap's span along its axis, between its two members or rows
+    auto gapSpan = [&](const C4Gap& gap, float& low, float& high) {
+        const auto& boundary = boundaries[gap.boundary];
+        if (gap.betweenRows) {
+            low = boundary.rowTop[gap.index] + boundary.rowHeight[gap.index];
+            high = boundary.rowTop[gap.index + 1];
+        } else {
+            low = memberLeft(boundary, gap.index) +
+                  memberSize(boundary, gap.index).w;
+            high = memberLeft(boundary, gap.index + 1);
+        }
+    };
+
+    // Label chips, in relation order: on the line in a tier of the label's
+    // gap, else anywhere along the line, through or just beside the chip,
+    // clear of boxes, frames, captions, the title and earlier chips, and
+    // preferably of other relations' lines. Returns true when a label did
+    // not fit and its gap gained a tier, for another layout pass.
+    float diagramWidth = 0.0f;
+    auto placeLabels = [&]() {
+        std::vector<C4Box> blocked;
+        for (const auto& element : elements) {
+            blocked.push_back(inflate({element.x, element.y,
+                                       element.x + element.width,
+                                       element.y + element.height},
+                                      labelClear));
+        }
+        // A chip may sit inside a boundary or outside it, not across its
+        // dashed edges or on its caption
+        for (size_t i = 1; i < boundaries.size(); i++) {
+            const auto& boundary = boundaries[i];
+            float x1 = boundary.x, y1 = boundary.y;
+            float x2 = x1 + boundary.width, y2 = y1 + boundary.height;
+            blocked.push_back(inflate({x1, y1, x2, y1}, labelGap));
+            blocked.push_back(inflate({x1, y2, x2, y2}, labelGap));
+            blocked.push_back(inflate({x1, y1, x1, y2}, labelGap));
+            blocked.push_back(inflate({x2, y1, x2, y2}, labelGap));
+            blocked.push_back(inflate(captionBox(boundary), labelGap));
+        }
+        if (!title.empty()) {
+            blocked.push_back(inflate(
+                {0.0f, 4.0f * scale, diagramWidth, 4.0f * scale + titleSize.h},
+                labelGap));
+        }
+        blocked.push_back({-1e9f, -1e9f, 1e9f, 0.0f});  // above the diagram
+
+        constexpr float kNone = 1e30f;
+        float step = 2.0f * scale;
+        float crossCost = 40.0f * scale;
+        std::vector<C4Box> chips;
+        std::vector<bool> grown(gaps.size(), false);
+        bool grew = false;
+        for (auto& link : links) {
+            if (link.chipW <= 0.0f) continue;
+            float w = link.chipW, h = link.chipH;
+            // Only what lies near the line can block its chip
+            C4Box around = inflate({std::min(link.a.x, link.b.x),
+                                    std::min(link.a.y, link.b.y),
+                                    std::max(link.a.x, link.b.x),
+                                    std::max(link.a.y, link.b.y)},
+                                   w + h);
+            std::vector<C4Box> nearby;
+            for (const auto& other : blocked) {
+                if (overlaps(other, around)) nearby.push_back(other);
+            }
+            for (const auto& chip : chips) {
+                C4Box kept = inflate(chip, labelGap);
+                if (overlaps(kept, around)) nearby.push_back(kept);
+            }
+            float bestCost = kNone;
+            C4Box best;
+            auto consider = [&](float cx, float cy, float cost) {
+                if (cost >= bestCost) return;
+                C4Box box{cx - w * 0.5f, cy - h * 0.5f, cx + w * 0.5f,
+                          cy + h * 0.5f};
+                for (const auto& other : nearby) {
+                    if (overlaps(box, other)) return;
+                }
+                for (const auto& other : links) {
+                    if (&other == &link) continue;
+                    for (const auto& segment : other.segments) {
+                        if (crosses(segment.first, segment.second, box)) {
+                            cost += crossCost;
+                            break;
+                        }
+                    }
+                }
+                if (cost < bestCost) {
+                    bestCost = cost;
+                    best = box;
+                }
+            };
+            float dx = link.b.x - link.a.x, dy = link.b.y - link.a.y;
+            float prefer = 0.5f;
+            if (link.gap != SIZE_MAX && link.from != link.to) {
+                const C4Gap& gap = gaps[link.gap];
+                float low, high;
+                gapSpan(gap, low, high);
+                float axisStart = gap.betweenRows ? link.a.y : link.a.x;
+                float axisRun = gap.betweenRows ? dy : dx;
+                if (std::abs(axisRun) > 0.001f) {
+                    float middle = ((low + high) * 0.5f - axisStart) / axisRun;
+                    if (middle >= 0.0f && middle <= 1.0f) prefer = middle;
+                    // Tiers centered across the gap, the middle ones first
+                    float used = gap.tiers * gap.extent +
+                                 (gap.tiers - 1) * labelGap;
+                    float slide = gap.betweenRows
+                                      ? w * 0.25f
+                                      : std::max(0.0f, h * 0.5f - 3.0f * scale);
+                    for (int k = 0; k < gap.tiers; k++) {
+                        float at = (low + high - used) * 0.5f +
+                                   gap.extent * 0.5f +
+                                   k * (gap.extent + labelGap);
+                        float t = (at - axisStart) / axisRun;
+                        if (t < 0.0f || t > 1.0f) continue;
+                        Point on{link.a.x + dx * t, link.a.y + dy * t};
+                        float rank =
+                            std::abs(k - (gap.tiers - 1) * 0.5f) * 2.0f * scale;
+                        // Slid along the tier while the line still crosses
+                        // the chip
+                        for (float s = 0.0f; s <= slide; s += step) {
+                            for (float sign : {1.0f, -1.0f}) {
+                                if (gap.betweenRows) {
+                                    consider(on.x + sign * s, on.y, rank + s);
+                                } else {
+                                    consider(on.x, on.y + sign * s, rank + s);
+                                }
+                                if (s == 0.0f) break;
+                            }
+                        }
+                    }
+                }
+            }
+            if (bestCost >= kNone) {
+                // Anywhere along the line, nearest the gap's middle first
+                float length = std::sqrt(dx * dx + dy * dy);
+                bool flat = std::abs(dx) >= std::abs(dy);
+                float slide = (flat ? h : w) * 0.5f + 3.0f * scale;
+                int samples =
+                    std::max(8, static_cast<int>(length / (4.0f * scale)));
+                std::vector<std::pair<float, Point>> candidates;
+                for (int i = 0; i <= samples; i++) {
+                    float t = static_cast<float>(i) / samples;
+                    Point on{link.a.x + dx * t, link.a.y + dy * t};
+                    for (float s = -slide; s <= slide; s += 1.5f * step) {
+                        float cost = std::abs(t - prefer) * length +
+                                     std::abs(s) * 1.5f + 8.0f * scale;
+                        candidates.push_back(
+                            {cost, flat ? Point{on.x, on.y + s}
+                                        : Point{on.x + s, on.y}});
+                    }
+                }
+                std::sort(candidates.begin(), candidates.end(),
+                          [](const auto& l, const auto& r) {
+                              return l.first < r.first;
+                          });
+                for (const auto& candidate : candidates) {
+                    if (candidate.first >= bestCost) break;
+                    consider(candidate.second.x, candidate.second.y,
+                             candidate.first);
+                }
+            }
+            if (bestCost < kNone) {
+                link.placed = true;
+                link.chip = best;
+                chips.push_back(best);
+            } else if (link.gap != SIZE_MAX && !grown[link.gap] &&
+                       gaps[link.gap].tiers <= gaps[link.gap].labels) {
+                gaps[link.gap].tiers++;
+                grown[link.gap] = true;
+                grew = true;
+            }
+        }
+        return grew;
+    };
+
+    for (int pass = 0;; pass++) {
+        for (const auto& gap : gaps) {
+            auto& boundary = boundaries[gap.boundary];
+            float size = gap.tiers * gap.extent + (gap.tiers - 1) * labelGap +
+                         2.0f * labelClear;
+            if (gap.betweenRows) {
+                boundary.rowGapAfter[gap.index] = std::max(memberGapY, size);
+            } else {
+                boundary.gapAfter[gap.index] = std::max(memberGapX, size);
+            }
+        }
+        SizeF rootSize = measureBoundary(0);
+        diagramWidth = std::max(rootSize.w, titleSize.w);
+        placeBoundary(0, (diagramWidth - rootSize.w) * 0.5f, top);
+        route();
+        if (!placeLabels() || pass == kC4LabelPasses) break;
+    }
+
+    // Last resort for a label no gap could hold: right of the diagram,
+    // joined to the middle of its line by a leader
+    float spill = diagramWidth;
+    for (const auto& element : elements) {
+        spill = std::max(spill, element.x + element.width);
+    }
+    for (const auto& link : links) {
+        if (link.placed) spill = std::max(spill, link.chip.x2);
+        for (const auto& segment : link.segments) {
+            spill = std::max({spill, segment.first.x, segment.second.x});
+        }
+    }
+    spill += labelClear;
+    float spillY = top;
+    for (auto& link : links) {
+        if (link.chipW <= 0.0f || link.placed) continue;
+        float y = std::max(spillY, (link.a.y + link.b.y - link.chipH) * 0.5f);
+        link.chip = {spill, y, spill + link.chipW, y + link.chipH};
+        link.placed = true;
+        link.leader = true;
+        spillY = y + link.chipH + labelGap;
+    }
+
+    if (!title.empty()) {
         Prim text;
         text.type = PrimType::Text;
         text.text = title;
         text.style = titleStyle;
         text.fill = Role::Text;
         text.x1 = 0;
-        text.y1 = top;
+        text.y1 = 4.0f * scale;
         text.x2 = diagramWidth;
-        text.y2 = top + titleSize.h;
+        text.y2 = 4.0f * scale + titleSize.h;
         result.prims.push_back(std::move(text));
-        top += titleSize.h + 14.0f * scale;
     }
-    placeBoundary(0, (diagramWidth - rootSize.w) * 0.5f, top);
 
     std::vector<Prim> texts;
 
@@ -886,155 +1432,98 @@ Built buildC4(std::string_view source, const Measure& measure, float scale) {
         frame.dashed = true;
         result.prims.push_back(std::move(frame));
 
-        TextStyle boundaryStyle;
-        boundaryStyle.bold = true;
-        boundaryStyle.scale = 0.85f;
-        std::string text = boundary.label;
-        if (!boundary.type.empty()) text += " [" + boundary.type + "]";
-        Size size = measure(text, boundaryStyle, boundary.width);
+        C4Box box = captionBox(boundary);
         Prim label;
         label.type = PrimType::Text;
-        label.text = text;
+        label.text = caption(boundary);
         label.style = boundaryStyle;
         label.fill = Role::Muted;
         label.alignH = -1;
-        label.x1 = boundary.x + 8.0f * scale;
-        label.y1 = boundary.y + boundary.height - size.h - 4.0f * scale;
-        label.x2 = boundary.x + boundary.width - 8.0f * scale;
-        label.y2 = boundary.y + boundary.height - 4.0f * scale;
+        label.x1 = box.x1;
+        label.y1 = box.y1;
+        label.x2 = box.x2;
+        label.y2 = box.y2;
         texts.push_back(std::move(label));
     }
 
     // Relations under the element boxes
-    auto findElement = [&](const std::string& alias) -> C4Element* {
-        for (auto& element : elements) {
-            if (element.alias == alias) return &element;
+    for (size_t r = 0; r < links.size(); r++) {
+        const auto& link = links[r];
+        for (size_t s = 0; s < link.segments.size(); s++) {
+            Prim line;
+            line.type = PrimType::Line;
+            line.x1 = link.segments[s].first.x;
+            line.y1 = link.segments[s].first.y;
+            line.x2 = link.segments[s].second.x;
+            line.y2 = link.segments[s].second.y;
+            line.stroke = Role::Muted;
+            line.strokeWidth = 1.3f * scale;
+            line.dashed = true;
+            line.arrow = s + 1 == link.segments.size();
+            result.prims.push_back(line);
         }
-        return nullptr;
-    };
-    for (const auto& rel : rels) {
-        C4Element* from = findElement(rel.from);
-        C4Element* to = findElement(rel.to);
-        if (!from || !to) {
-            result.error = "Unknown alias in relation";
-            return result;
-        }
-        float fx = from->x + from->width * 0.5f;
-        float fy = from->y + from->height * 0.5f;
-        float tx = to->x + to->width * 0.5f;
-        float ty = to->y + to->height * 0.5f;
-        Point start = clipRect(fx, fy, tx, ty, from->x, from->y,
-                               from->x + from->width, from->y + from->height);
-        Point end = clipRect(tx, ty, fx, fy, to->x, to->y, to->x + to->width,
-                             to->y + to->height);
-        Prim line;
-        line.type = PrimType::Line;
-        line.x1 = start.x;
-        line.y1 = start.y;
-        line.x2 = end.x;
-        line.y2 = end.y;
-        line.stroke = Role::Muted;
-        line.strokeWidth = 1.3f * scale;
-        line.dashed = true;
-        line.arrow = true;
-        result.prims.push_back(line);
-        if (rel.bidirectional) {
-            Prim back = line;
-            std::swap(back.x1, back.x2);
-            std::swap(back.y1, back.y2);
+        if (rels[r].bidirectional) {
+            Prim back;
+            back.type = PrimType::Line;
+            back.x1 = link.segments.front().second.x;
+            back.y1 = link.segments.front().second.y;
+            back.x2 = link.segments.front().first.x;
+            back.y2 = link.segments.front().first.y;
+            back.stroke = Role::Muted;
+            back.strokeWidth = 1.3f * scale;
+            back.dashed = true;
+            back.arrow = true;
             result.prims.push_back(std::move(back));
         }
+        if (!link.placed) continue;
+        if (link.leader) {
+            Prim leader;
+            leader.type = PrimType::Line;
+            leader.x1 = (link.a.x + link.b.x) * 0.5f;
+            leader.y1 = (link.a.y + link.b.y) * 0.5f;
+            leader.x2 = link.chip.x1;
+            leader.y2 = (link.chip.y1 + link.chip.y2) * 0.5f;
+            leader.stroke = Role::Muted;
+            leader.strokeWidth = 1.0f * scale;
+            leader.dashed = true;
+            result.prims.push_back(std::move(leader));
+        }
 
-        if (!rel.label.empty()) {
-            TextStyle relStyle;
-            relStyle.scale = 0.78f;
-            Size size = measure(rel.label, relStyle, 150.0f * scale);
-            float chipW = std::min(size.w, 150.0f * scale);
-            std::string technText;
-            Size technSize;
-            TextStyle technStyle2;
-            technStyle2.scale = 0.7f;
-            technStyle2.italic = true;
-            if (!rel.techn.empty()) {
-                technText = "[" + rel.techn + "]";
-                technSize = measure(technText, technStyle2, 150.0f * scale);
-                chipW = std::max(chipW, technSize.w);
-            }
-            float cx = (start.x + end.x) * 0.5f;
-            float cy = (start.y + end.y) * 0.5f;
-            // Straight rels can cross intermediate boxes; put the label on
-            // the longest clear stretch of the line instead of the midpoint
-            {
-                constexpr int kSamples = 48;
-                auto blocked = [&](float px, float py) {
-                    for (const auto& other : elements) {
-                        if (&other == from || &other == to) continue;
-                        if (px > other.x && px < other.x + other.width &&
-                            py > other.y && py < other.y + other.height) {
-                            return true;
-                        }
-                    }
-                    return false;
-                };
-                int bestStart = -1, bestLength = 0, runStart = -1;
-                for (int i = 0; i <= kSamples; i++) {
-                    float t = static_cast<float>(i) / kSamples;
-                    bool clear = !blocked(start.x + (end.x - start.x) * t,
-                                          start.y + (end.y - start.y) * t);
-                    if (clear && runStart < 0) runStart = i;
-                    if ((!clear || i == kSamples) && runStart >= 0) {
-                        int length = (clear ? i : i - 1) - runStart + 1;
-                        if (length > bestLength) {
-                            bestLength = length;
-                            bestStart = runStart;
-                        }
-                        runStart = -1;
-                    }
-                }
-                // Any clear stretch beats covering a box center
-                if (bestLength >= 2) {
-                    float t = (bestStart + bestLength * 0.5f) / kSamples;
-                    cx = start.x + (end.x - start.x) * t;
-                    cy = start.y + (end.y - start.y) * t;
-                }
-            }
-            float chipH = size.h + technSize.h;
-            // A visible chip like the flowchart edge labels: an invisible
-            // background mask would punch holes through box edges instead
-            Prim chip;
-            chip.type = PrimType::RoundRect;
-            chip.radius = 4.0f * scale;
-            chip.x1 = cx - chipW * 0.5f - 5.0f * scale;
-            chip.y1 = cy - chipH * 0.5f - 2.0f * scale;
-            chip.x2 = cx + chipW * 0.5f + 5.0f * scale;
-            chip.y2 = cy + chipH * 0.5f + 2.0f * scale;
-            chip.fill = Role::Fill;
-            chip.stroke = Role::Muted;
-            chip.strokeWidth = 1.0f * scale;
-            // Rides with the texts so it draws over the element boxes
-            texts.push_back(chip);
-            Prim label;
-            label.type = PrimType::Text;
-            label.text = rel.label;
-            label.style = relStyle;
-            label.fill = Role::Text;
-            label.x1 = cx - chipW * 0.5f;
-            label.y1 = cy - chipH * 0.5f;
-            label.x2 = cx + chipW * 0.5f;
-            label.y2 = cy - chipH * 0.5f + size.h;
-            texts.push_back(std::move(label));
-            if (!technText.empty()) {
-                Prim techn;
-                techn.type = PrimType::Text;
-                techn.text = technText;
-                techn.style = technStyle2;
-                techn.fill = Role::Muted;
-                techn.x1 = label.x1;
-                techn.y1 = label.y2;
-                techn.x2 = label.x2;
-                techn.y2 = label.y2 + technSize.h;
-                texts.push_back(std::move(techn));
-            }
+        // A visible chip like the flowchart edge labels: an invisible
+        // background mask would punch holes through box edges instead
+        Prim chip;
+        chip.type = PrimType::RoundRect;
+        chip.radius = 4.0f * scale;
+        chip.x1 = link.chip.x1;
+        chip.y1 = link.chip.y1;
+        chip.x2 = link.chip.x2;
+        chip.y2 = link.chip.y2;
+        chip.fill = Role::Fill;
+        chip.stroke = Role::Muted;
+        chip.strokeWidth = 1.0f * scale;
+        // Rides with the texts so it draws over the relation lines
+        texts.push_back(chip);
+        Prim label;
+        label.type = PrimType::Text;
+        label.text = rels[r].label;
+        label.style = relStyle;
+        label.fill = Role::Text;
+        label.x1 = chip.x1 + 5.0f * scale;
+        label.y1 = chip.y1 + 2.0f * scale;
+        label.x2 = chip.x2 - 5.0f * scale;
+        label.y2 = label.y1 + link.labelSize.h;
+        texts.push_back(std::move(label));
+        if (!link.technText.empty()) {
+            Prim techn;
+            techn.type = PrimType::Text;
+            techn.text = link.technText;
+            techn.style = relTechnStyle;
+            techn.fill = Role::Muted;
+            techn.x1 = label.x1;
+            techn.y1 = label.y2;
+            techn.x2 = label.x2;
+            techn.y2 = label.y2 + link.technSize.h;
+            texts.push_back(std::move(techn));
         }
     }
 
@@ -1174,14 +1663,23 @@ Built buildC4(std::string_view source, const Measure& measure, float scale) {
     }
     for (auto& text : texts) result.prims.push_back(std::move(text));
 
-    float bottom = 0.0f;
+    float right = diagramWidth, bottom = 0.0f;
     for (const auto& element : elements) {
         bottom = std::max(bottom, element.y + element.height);
     }
     for (const auto& boundary : boundaries) {
         bottom = std::max(bottom, boundary.y + boundary.height);
     }
-    result.width = diagramWidth;
+    // Chips and loops may stand out past the boxes
+    for (const auto& link : links) {
+        for (const auto& segment : link.segments) {
+            right = std::max({right, segment.first.x, segment.second.x});
+        }
+        if (!link.placed) continue;
+        right = std::max(right, link.chip.x2);
+        bottom = std::max(bottom, link.chip.y2);
+    }
+    result.width = right > diagramWidth ? right + 2.0f * scale : diagramWidth;
     result.height = bottom + 8.0f * scale;
     result.ok = true;
     normalizeLeft(result);

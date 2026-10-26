@@ -1,5 +1,6 @@
 #include "mermaid.h"
 #include "mermaid_ext.h"
+#include "c4_label_checks.h"
 
 #include <algorithm>
 #include <fstream>
@@ -412,6 +413,9 @@ void testExtBuilders() {
          "curve b{70, 75, 85}\nmax 100\nmin 0\n"},
         {Kind::Sankey, "sankey",
          "sankey-beta\nA,B,10\nA,C,5\nB,D,8\nC,D,5\n\"E, e\",D,2\n"},
+        {Kind::C4, "c4",
+         "C4Context\n    Person(a, \"A\")\n    System(b, \"B\")\n"
+         "    Rel(a, b, \"Uses\")\n"},
     };
     for (const auto& testCase : kCases) {
         auto built = mermaidext::build(testCase.kind, testCase.source,
@@ -533,6 +537,372 @@ void testExtFallbacks() {
     check(!pie.ok, "negative pie values fall back");
 }
 
+// --- C4 relation labels ---
+// A relation's label sat on the middle of its line, so between two shapes
+// 24 px apart it covered both of them and their text, and the labels of
+// relations between the same shapes covered each other
+
+// Builds a C4 source and checks every label: clear of the boxes, frames,
+// captions, text, arrowheads and other labels, and on its own line
+mermaidext::Built checkC4Labels(const std::string& name,
+                                const std::string& source, float scale) {
+    auto built = mermaidext::build(mermaidext::Kind::C4, source, fakeMeasure,
+                                   scale);
+    const std::string at = name + (scale == 1.0f ? " at 1x" : " at 1.5x");
+    check(built.ok, (at + " builds").c_str());
+    if (!built.ok) {
+        std::cerr << "  (" << built.error << ")\n";
+        return built;
+    }
+    const auto problems = c4checks::labelProblems(built, source, scale);
+    for (const auto& problem : problems) {
+        std::cerr << "  " << at << ": " << problem << '\n';
+    }
+    check(problems.empty(),
+          (at + ": each label is clear of boxes, text, frames, arrowheads "
+                "and the other labels, on its own line").c_str());
+    return built;
+}
+
+// The lines drawn between two element boxes
+std::vector<const mermaidext::Prim*> linesBetween(const c4checks::Parts& parts,
+                                                  const c4checks::Box& a,
+                                                  const c4checks::Box& b) {
+    std::vector<const mermaidext::Prim*> lines;
+    for (const auto* line : parts.lines) {
+        mermaidext::Point p{line->x1, line->y1}, q{line->x2, line->y2};
+        if ((c4checks::onEdge(p, a) && c4checks::onEdge(q, b)) ||
+            (c4checks::onEdge(p, b) && c4checks::onEdge(q, a))) {
+            lines.push_back(line);
+        }
+    }
+    return lines;
+}
+
+const char* const kC4Reported = R"(C4Context
+    title Tinta in context
+    Person(writer, "Writer", "Reads and edits Markdown")
+    System(tinta, "Tinta", "Native Markdown viewer and editor")
+    System_Ext(plantuml, "PlantUML", "Optional diagram tool")
+    System_Ext(github, "GitHub Releases", "Update check for portable builds")
+    Rel(writer, tinta, "Opens files in")
+    Rel(tinta, plantuml, "Renders diagrams with")
+    Rel(tinta, github, "Checks for updates")
+)";
+
+void testC4ReportedLabels() {
+    for (float scale : {1.0f, 1.5f}) {
+        auto built = checkC4Labels("reported diagram", kC4Reported, scale);
+        if (!built.ok) continue;
+        auto parts = c4checks::partsOf(built);
+        c4checks::Box writer, tinta, plantuml, github, opens, renders, updates;
+        bool found = c4checks::elementBox(parts, "Writer", writer) &&
+                     c4checks::elementBox(parts, "Tinta", tinta) &&
+                     c4checks::elementBox(parts, "PlantUML", plantuml) &&
+                     c4checks::elementBox(parts, "GitHub Releases", github) &&
+                     c4checks::chipBox(parts, "Opens files in", opens) &&
+                     c4checks::chipBox(parts, "Renders diagrams with", renders) &&
+                     c4checks::chipBox(parts, "Checks for updates", updates);
+        check(found, "the reported diagram draws its boxes and labels");
+        if (!found) continue;
+        // The gaps widen to hold the labels, which keep to the free space
+        check(opens.x1 > writer.x2 && opens.x2 < tinta.x1,
+              "\"Opens files in\" sits between Writer and Tinta");
+        check(renders.x1 > tinta.x2 && renders.x2 < plantuml.x1,
+              "\"Renders diagrams with\" sits between Tinta and PlantUML");
+        check(updates.y1 > tinta.y2 && updates.y2 < github.y1,
+              "\"Checks for updates\" sits between Tinta and GitHub Releases");
+        check(!c4checks::overlaps(opens, tinta) &&
+                  !c4checks::overlaps(renders, tinta),
+              "no label covers the Tinta box or its description");
+    }
+}
+
+void testC4LabelLayouts() {
+    struct Case {
+        const char* name;
+        const char* source;
+    };
+    const Case kCases[] = {
+        {"direction keywords", R"(C4Container
+    Container(a, "Alpha", "Go")
+    Container(b, "Beta", "Go")
+    Container(c, "Gamma", "Go")
+    Container(d, "Delta", "Go")
+    Container(e, "Epsilon", "Go")
+    Container(f, "Zeta", "Go")
+    Rel_R(a, b, "Right to")
+    Rel_Right(b, c, "Right again")
+    Rel_L(c, b, "Left to")
+    Rel_Left(b, a, "Left again")
+    Rel_D(a, d, "Down to")
+    Rel_Down(b, e, "Down again")
+    Rel_U(f, c, "Up to")
+    Rel_Up(e, b, "Up again")
+    Rel_Back(d, e, "Back to")
+    Rel_Neighbor(e, f, "Next to")
+)"},
+        {"BiRel", R"(C4Context
+    System(shop, "Bookshop", "Sells books online")
+    System_Ext(warehouse, "Warehouse", "Picks and ships orders")
+    System_Ext(publisher, "Publisher feed", "New titles and prices")
+    System_Ext(accounting, "Accounting", "Invoices and ledgers")
+    BiRel(shop, warehouse, "Syncs stock with", "EDI")
+    Rel(warehouse, shop, "Reports shipments to")
+    Rel(publisher, warehouse, "Announces new titles to")
+    BiRel(shop, accounting, "Exchanges invoices with")
+    BiRel(accounting, warehouse, "Reconciles stock with")
+)"},
+        {"nested boundaries", R"(C4Container
+    title Nested boundaries
+    Person(customer, "Customer", "Orders books")
+    Enterprise_Boundary(company, "Bookshop Ltd") {
+        System_Boundary(shop, "Bookshop") {
+            Container(web, "Web shop", "TypeScript", "Catalogue")
+            Container(api, "Shop API", "Go", "Orders")
+            Container(admin, "Back office", "Django")
+            ContainerDb(db, "Orders", "PostgreSQL", "Orders and stock")
+        }
+        Boundary(ops, "Operations", "team") {
+            Container(jobs, "Jobs", "Go", "Nightly work")
+        }
+    }
+    System_Ext(pay, "Payment provider")
+    Rel(customer, web, "Orders through", "HTTPS")
+    Rel(web, api, "Calls", "JSON")
+    Rel(api, db, "Stores orders in", "SQL")
+    Rel(admin, api, "Manages stock with")
+    Rel(jobs, db, "Archives old orders in")
+    Rel(api, pay, "Charges cards with")
+    Rel(pay, customer, "Sends receipts to")
+)"},
+        {"three rows", R"(C4Component
+    Container(spa, "Single-page app", "TypeScript", "Runs in the browser")
+    Component(router, "Router", "Go", "Maps URLs to handlers")
+    Component(auth, "Auth", "Go", "Checks sessions")
+    Component(catalogue, "Catalogue", "Go", "Lists and searches books")
+    Component(basket, "Basket", "Go", "Holds chosen books")
+    Component(orders, "Orders", "Go", "Turns baskets into orders")
+    ComponentDb(store, "Store", "PostgreSQL", "Books and orders")
+    ComponentQueue(events, "Events", "NATS", "Order events")
+    Rel(spa, router, "Sends requests to", "JSON/HTTPS")
+    Rel(router, auth, "Checks sessions with")
+    Rel(router, catalogue, "Routes searches to")
+    Rel(router, basket, "Routes basket edits to")
+    Rel(basket, orders, "Checks out through")
+    Rel(catalogue, store, "Reads books from", "SQL")
+    Rel(orders, store, "Writes orders to", "SQL")
+    Rel(orders, events, "Publishes to")
+    Rel(auth, events, "Logs sign-ins to")
+    Rel(spa, auth, "Refreshes tokens with")
+)"},
+        {"dense neighbours", R"(C4Container
+    Person(user, "User", "Reads and writes")
+    Container(spa, "Single-page app", "TypeScript")
+    Container(api, "API", "Go")
+    ContainerDb(db, "Documents", "PostgreSQL")
+    ContainerQueue(bus, "Event bus", "Kafka")
+    Container(worker, "Indexer", "Go")
+    Rel(user, spa, "Edits in")
+    Rel(spa, user, "Shows changes to")
+    Rel(spa, api, "Saves through", "JSON/HTTPS")
+    Rel(api, spa, "Pushes edits to", "WebSocket")
+    BiRel(spa, api, "Keeps a session with")
+    Rel(api, db, "Reads and writes", "SQL")
+    Rel(db, api, "Notifies", "LISTEN")
+    Rel(api, bus, "Publishes changes to")
+    Rel(bus, worker, "Feeds")
+    Rel(worker, bus, "Acknowledges")
+    BiRel(worker, api, "Reports progress to")
+)"},
+        {"fan-out", R"(C4Context
+    System(left, "Left", "Beside the person")
+    Person(person, "Person", "Uses everything")
+    System(right, "Right", "Beside the person")
+    System(a, "A", "Below, left")
+    System(b, "B", "Below, middle")
+    System(c, "C", "Below, right")
+    Rel(person, a, "Uses A for this")
+    Rel(person, b, "Uses B for that")
+    Rel(person, c, "Uses C for the rest")
+    Rel(person, left, "Talks to")
+    Rel(person, right, "Talks to as well")
+    Rel(left, a, "Feeds")
+)"},
+        {"deployment", R"(C4Deployment
+    Deployment_Node(laptop, "Laptop", "Windows 11") {
+        Deployment_Node(folder, "Portable folder", "tinta.exe") {
+            Container(viewer, "Viewer", "C++17", "Draws Markdown")
+            Container(settings, "Settings", "INI file")
+        }
+        Node(java, "Java", "OpenJDK") {
+            Container(plantuml, "PlantUML", "Java")
+        }
+    }
+    Node_R(cloud, "GitHub", "Cloud") {
+        Container(releases, "Releases", "JSON API")
+    }
+    Node_L(spare, "Spare node")
+    Rel(viewer, settings, "Reads", "INI")
+    Rel(viewer, plantuml, "Renders through", "stdin")
+    Rel(viewer, releases, "Checks for updates", "HTTPS")
+)"},
+        {"self relation", R"(C4Container
+    Container(api, "API", "Go", "Serves requests")
+    Container(db, "Store", "SQL")
+    Rel(api, api, "Retries failed calls")
+    Rel(api, db, "Reads")
+    Rel(db, db, "Vacuums")
+)"},
+    };
+    for (const auto& testCase : kCases) {
+        for (float scale : {1.0f, 1.5f}) {
+            checkC4Labels(testCase.name, testCase.source, scale);
+        }
+    }
+
+    // Relations between the same two shapes get lines of their own, side
+    // by side, rather than one line under two labels
+    auto dense = mermaidext::build(mermaidext::Kind::C4, kCases[4].source,
+                                   fakeMeasure, 1.0f);
+    auto parts = c4checks::partsOf(dense);
+    c4checks::Box spa, api, user;
+    if (c4checks::elementBox(parts, "Single-page app", spa) &&
+        c4checks::elementBox(parts, "API", api) &&
+        c4checks::elementBox(parts, "User", user)) {
+        auto threeLanes = linesBetween(parts, spa, api);
+        auto twoLanes = linesBetween(parts, user, spa);
+        // BiRel draws its line twice, once per arrowhead
+        check(threeLanes.size() == 4 && twoLanes.size() == 2,
+              "each relation between two shapes has its own line");
+        bool apart = true;
+        for (const auto* lanes : {&threeLanes, &twoLanes}) {
+            for (size_t i = 0; i < lanes->size(); i++) {
+                for (size_t j = i + 1; j < lanes->size(); j++) {
+                    const auto* p = (*lanes)[i];
+                    const auto* q = (*lanes)[j];
+                    bool reversed = p->x1 == q->x2 && p->y1 == q->y2 &&
+                                    p->x2 == q->x1 && p->y2 == q->y1;
+                    if (!reversed && std::abs(p->y1 - q->y1) < 10.0f &&
+                        std::abs(p->y2 - q->y2) < 10.0f) {
+                        apart = false;
+                    }
+                }
+            }
+        }
+        check(apart, "lanes between the same two shapes run apart");
+    } else {
+        check(false, "the dense diagram draws its boxes");
+    }
+
+    // A relation passing behind a box keeps a lane beside the relation that
+    // ends at that box, so neither label sits on the other's line
+    {
+        auto rows = mermaidext::build(mermaidext::Kind::C4, kCases[3].source,
+                                      fakeMeasure, 1.0f);
+        auto rowParts = c4checks::partsOf(rows);
+        c4checks::Box browser, router, auth;
+        bool found =
+            c4checks::elementBox(rowParts, "Single-page app", browser) &&
+            c4checks::elementBox(rowParts, "Router", router) &&
+            c4checks::elementBox(rowParts, "Auth", auth);
+        auto toRouter = linesBetween(rowParts, browser, router);
+        auto toAuth = linesBetween(rowParts, browser, auth);
+        check(found && toRouter.size() == 1 && toAuth.size() == 1 &&
+                  std::abs(toRouter[0]->y1 - toAuth[0]->y1) >= 10.0f,
+              "a line passing behind a box runs beside the line ending there");
+    }
+
+    // Without labels the layout keeps its 24 px and 26 px gaps
+    const char* plain = R"(C4Context
+    Person(a, "A")
+    System(b, "B")
+    System(c, "C")
+    System(d, "D")
+    Rel(a, b, "")
+    Rel(a, d, "")
+)";
+    auto unlabelled =
+        mermaidext::build(mermaidext::Kind::C4, plain, fakeMeasure, 1.0f);
+    auto plainParts = c4checks::partsOf(unlabelled);
+    c4checks::Box a, b, c, d;
+    check(c4checks::elementBox(plainParts, "A", a) &&
+              c4checks::elementBox(plainParts, "B", b) &&
+              c4checks::elementBox(plainParts, "C", c) &&
+              c4checks::elementBox(plainParts, "D", d) &&
+              std::abs(b.x1 - a.x2 - 24.0f) < 0.01f &&
+              std::abs(c.x1 - b.x2 - 24.0f) < 0.01f &&
+              std::abs(d.y1 - std::max({a.y2, b.y2, c.y2}) - 26.0f) < 0.01f &&
+              plainParts.chips.empty(),
+          "a diagram without labels keeps its gaps");
+
+    // The last resort: a loop on an element boxed in by its own boundary's
+    // frame and a close neighbour takes its label off to the right of the
+    // diagram, joined to the loop by a leader
+    const char* boxedIn = R"(C4Context
+    System_Boundary(box, "Box") {
+        System(alone, "Alone", "Alone in its boundary")
+    }
+    System(next, "Next", "Right beside it")
+    Rel(alone, alone, "Checks itself")
+)";
+    auto spilled = checkC4Labels("boxed-in loop", boxedIn, 1.0f);
+    auto spilledParts = c4checks::partsOf(spilled);
+    c4checks::Box chip, next;
+    check(c4checks::chipBox(spilledParts, "Checks itself", chip) &&
+              c4checks::elementBox(spilledParts, "Next", next) &&
+              chip.x1 > next.x2 && chip.x2 <= spilled.width,
+          "a label with no room left goes right of the diagram");
+}
+
+// The fixture's diagrams, among other Markdown, all keep their labels clear
+void testC4LabelFixture() {
+    std::ifstream file(TINTA_MERMAID_C4_FIXTURE, std::ios::binary);
+    check(static_cast<bool>(file), "C4 label fixture opens");
+    const std::string markdown((std::istreambuf_iterator<char>(file)),
+                               std::istreambuf_iterator<char>());
+    const auto fences = mermaidFences(markdown);
+    check(fences.size() == 8, "the C4 label fixture has its eight diagrams");
+    for (size_t i = 0; i < fences.size(); i++) {
+        check(mermaidext::detectKind(fences[i]) == mermaidext::Kind::C4,
+              "every fixture fence is a C4 diagram");
+        for (float scale : {1.0f, 1.5f}) {
+            checkC4Labels("fixture fence " + std::to_string(i + 1), fences[i],
+                          scale);
+        }
+    }
+}
+
+// Crowded diagrams: eight rows of elements, each related to the next three,
+// so lines cross every row and gap; and sixteen relations between the same
+// two elements, more lanes than their boxes can hold apart
+void testC4CrowdedLabels() {
+    std::string rows = "C4Container\n";
+    for (int i = 0; i < 24; i++) {
+        rows += "Container(e" + std::to_string(i) + ", \"Element " +
+                std::to_string(i) + "\", \"Go\", \"Does part " +
+                std::to_string(i) + " of the work\")\n";
+    }
+    for (int i = 0; i < 24; i++) {
+        for (int step = 1; step <= 3 && i + step < 24; step++) {
+            rows += "Rel(e" + std::to_string(i) + ", e" +
+                    std::to_string(i + step) + ", \"Calls " +
+                    std::to_string(i) + " to " + std::to_string(i + step) +
+                    "\", \"JSON\")\n";
+        }
+    }
+    checkC4Labels("eight crowded rows", rows, 1.0f);
+
+    std::string pair = "C4Container\n"
+                       "Container(a, \"Client\", \"Go\")\n"
+                       "Container(b, \"Server\", \"Go\")\n";
+    for (int i = 0; i < 16; i++) {
+        pair += "Rel(" + std::string(i % 2 ? "b, a" : "a, b") +
+                ", \"Message " + std::to_string(i) + "\", \"HTTPS\")\n";
+    }
+    checkC4Labels("sixteen relations between two elements", pair, 1.0f);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -551,6 +921,10 @@ int main(int argc, char** argv) {
     testExtBuilders();
     testExtFallbacks();
     testFrontMatterFixture();
+    testC4ReportedLabels();
+    testC4LabelLayouts();
+    testC4CrowdedLabels();
+    testC4LabelFixture();
     testFiles(argc, argv);
 
     if (failures != 0) {
