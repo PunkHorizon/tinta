@@ -193,7 +193,7 @@ void testMermaidAsymmetricShape(App& app) {
     for (const auto& block : app.codeBlocks) {
         if (block.isDiagram) diagrams.push_back(block.bounds);
     }
-    check(diagrams.size() == 4, "the fixture's four Mermaid fences draw as diagrams");
+    check(diagrams.size() == 6, "the fixture's six Mermaid fences draw as diagrams");
     check(app.docText.find(L"Text after the last diagram") != std::wstring::npos,
           "text after the last diagram lays out");
 
@@ -204,7 +204,8 @@ void testMermaidAsymmetricShape(App& app) {
     auto area = [](const D2D1_RECT_F& r) { return (r.right - r.left) * (r.bottom - r.top); };
     const std::vector<std::wstring> labels = {
         L"Route request", L"Show screen", L"Screen", L"Quoted > label", L"Two lines\nof label",
-        L"One; two | three", L"Parse", L"Output", L"Flag", L"Back again"};
+        L"One; two | three", L"Parse", L"Output", L"Flag", L"Back again", L"End", L"Arrow",
+        L"Dotted", L"Dotted open", L"Thick text"};
     size_t found = 0, tips = 0;
     for (const auto& run : app.layoutTextRuns) {
         if (!run.layout || run.docStart + run.docLength > app.docText.size()) continue;
@@ -282,7 +283,7 @@ void testMermaidAsymmetricShape(App& app) {
         }
     }
     check(found == labels.size(),
-          "the ten asymmetric labels are laid out (" + std::to_string(found) + ")");
+          "the fifteen asymmetric labels are laid out (" + std::to_string(found) + ")");
     // Into S, C, D, Parse and Output from the left, out of Flag leftwards
     check(tips == 6, "six edges meet a notch's tip (" + std::to_string(tips) + ")");
 
@@ -318,8 +319,31 @@ void testMermaidAsymmetricShape(App& app) {
         }
     }
     check(polygons.size() == labels.size(),
-          "the export draws the ten asymmetric nodes (" + std::to_string(polygons.size()) + ")");
+          "the export draws the fifteen asymmetric nodes (" + std::to_string(polygons.size()) + ")");
     check(exportTips == 6, "six exported edges meet a notch's tip (" + std::to_string(exportTips) + ")");
+
+    // The last diagram's longer links draw as their short forms: three of
+    // its nine edges dotted, three thick, three without a head
+    if (diagrams.size() == 6) {
+        const float scale = app.contentScale * app.zoomFactor;
+        size_t edges = 0, dotted = 0, thick = 0, open = 0;
+        for (const auto& connector : app.layoutConnectors) {
+            if (connector.points.empty()) continue;
+            const auto start = connector.points.front();
+            if (start.x < diagrams[5].left || start.x > diagrams[5].right ||
+                start.y < diagrams[5].top || start.y > diagrams[5].bottom) {
+                continue;
+            }
+            ++edges;
+            dotted += connector.dashed;
+            thick += connector.stroke > 2.0f * scale;
+            open += !connector.directed;
+        }
+        check(edges == 9 && dotted == 3 && thick == 3 && open == 3,
+              "longer links draw as their short forms (" + std::to_string(edges) + " edges, " +
+                  std::to_string(dotted) + " dotted, " + std::to_string(thick) + " thick, " +
+                  std::to_string(open) + " open)");
+    }
 }
 
 // C4 relation labels, measured with the app's fonts: every diagram of the

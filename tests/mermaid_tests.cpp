@@ -634,19 +634,100 @@ void testAsymmetricShape() {
               edgeText.diagram.edges[2].label == "x>y" && asymmetricIds(edgeText.diagram).empty(),
           "a '>' in edge text stays text");
 
-    // Circle and cross ends are not drawn natively, so those edges show
-    // their source, as before. A '>' heading a longer arrow does too, as in
-    // Mermaid's own "B ---->|No| E", rather than open a node named '-'.
-    for (const char* line : {"A --o B", "A --x B", "B ---->|No| E[End]", "A--->B", "A->B"}) {
-        auto parsed = mermaid::parse(std::string("flowchart LR\n") + line + "\n");
-        check(!parsed.success && parsed.error == "Unsupported edge syntax",
-              (std::string("'") + line + "' shows its source as an unsupported edge").c_str());
-    }
+    // The '>' of "->", which Mermaid does not have, opens no node either:
+    // the diagram shows its source
+    auto arrowTypo = mermaid::parse("flowchart LR\nA->B\n");
+    check(!arrowTypo.success && arrowTypo.error == "Unsupported edge syntax",
+          "'A->B' shows its source as an unsupported edge");
 
     check(mermaid::leftNotch(mermaid::NodeShape::Asymmetric, 52.0f) == 26.0f &&
               mermaid::leftNotch(mermaid::NodeShape::Rectangle, 52.0f) == 0.0f &&
               mermaid::leftNotch(mermaid::NodeShape::Hexagon, 52.0f) == 0.0f,
           "only the asymmetric shape is notched, half its height in");
+}
+
+// A longer link is the same edge as its short form; Mermaid's extra length
+// only stretches it over more ranks. Links Tinta does not draw (circle and
+// cross ends, both-way and invisible links) show the source.
+void testLongLinks() {
+    struct Case {
+        const char* line;
+        bool directed;
+        bool dashed;
+        float strokeScale;
+        const char* label;
+    };
+    const Case cases[] = {
+        {"A-->B", true, false, 1.0f, ""},
+        {"A ---> B", true, false, 1.0f, ""},
+        {"A---->B", true, false, 1.0f, ""},
+        {"A ==> B", true, false, 2.0f, ""},
+        {"A ===> B", true, false, 2.0f, ""},
+        {"A====>B", true, false, 2.0f, ""},
+        {"A -.-> B", true, true, 1.0f, ""},
+        {"A -..-> B", true, true, 1.0f, ""},
+        {"A-...->B", true, true, 1.0f, ""},
+        {"A --- B", false, false, 1.0f, ""},
+        {"A ---- B", false, false, 1.0f, ""},
+        {"A === B", false, false, 2.0f, ""},
+        {"A====B", false, false, 2.0f, ""},
+        {"A -.- B", false, true, 1.0f, ""},
+        {"A -..- B", false, true, 1.0f, ""},
+        {"A -- text --> B", true, false, 1.0f, "text"},
+        {"A -- text ---> B", true, false, 1.0f, "text"},
+        {"A-- a-b --->B", true, false, 1.0f, "a-b"},
+        {"A -- text --- B", false, false, 1.0f, "text"},
+        {"A == text ==> B", true, false, 2.0f, "text"},
+        {"A == text ===> B", true, false, 2.0f, "text"},
+        {"A == text === B", false, false, 2.0f, "text"},
+        {"A -. text .-> B", true, true, 1.0f, "text"},
+        {"A -. text ..-> B", true, true, 1.0f, "text"},
+        {"A -. text .- B", false, true, 1.0f, "text"},
+        {"A -. \"x .-> y\" ..-> B", true, true, 1.0f, "x .-> y"},
+        {"A ---->|text| B", true, false, 1.0f, "text"},
+        {"A ===>|a > b| B", true, false, 2.0f, "a > b"},
+        {"A ---> B>Text]", true, false, 1.0f, ""},
+        {"A>Text] ===> B", true, false, 2.0f, ""},
+        {"A -..-> B>\"c > d\"]", true, true, 1.0f, ""},
+    };
+    for (const auto& item : cases) {
+        const std::string name = std::string("'") + item.line + "'";
+        auto parsed = mermaid::parse(std::string("flowchart TD\n") + item.line + "\n");
+        check(parsed.success, (name + " parses").c_str());
+        if (!parsed.success) {
+            std::cerr << "  " << parsed.error << '\n';
+            continue;
+        }
+        const auto& diagram = parsed.diagram;
+        check(diagram.nodes.size() == 2 && findNode(diagram, "A") && findNode(diagram, "B"),
+              (name + " has nodes A and B, and no others").c_str());
+        const auto* edge = findEdge(diagram, "A", "B");
+        check(diagram.edges.size() == 1 && edge && edge->directed == item.directed &&
+                  edge->dashed == item.dashed && edge->strokeScale == item.strokeScale &&
+                  edge->label == item.label,
+              (name + " is the edge its short form draws").c_str());
+    }
+
+    // Mermaid's own example of a longer link
+    auto docs = mermaid::parse(
+        "flowchart TD\n"
+        "    A[Start] --> B{Is it?}\n"
+        "    B -->|Yes| C[OK]\n"
+        "    C --> D[Rethink]\n"
+        "    D --> B\n"
+        "    B ---->|No| E[End]\n");
+    const auto* no = docs.success ? findEdge(docs.diagram, "B", "E") : nullptr;
+    check(docs.success && docs.diagram.nodes.size() == 5 && docs.diagram.edges.size() == 5 &&
+              no && no->directed && no->label == "No",
+          "Mermaid's 'B ---->|No| E[End]' is an edge labelled No");
+
+    for (const char* line : {"A->B", "A -> B", "A --o B", "A --x B", "Ao--oB", "A o--o B",
+                             "A x--x B", "A<-->B", "A <--> B", "A ~~~ B", "A~~~B", "A---oB",
+                             "A ==x B", "A -.-o B", "A --o B --> C"}) {
+        auto parsed = mermaid::parse(std::string("flowchart LR\n") + line + "\n");
+        check(!parsed.success && parsed.error.find("edge") != std::string::npos,
+              (std::string("'") + line + "' shows its source").c_str());
+    }
 }
 
 // The asymmetric shape fixture: every fence parses, with its asymmetric nodes
@@ -656,8 +737,9 @@ void testAsymmetricFixture() {
     const std::string markdown((std::istreambuf_iterator<char>(file)),
                                std::istreambuf_iterator<char>());
     const auto fences = mermaidFences(markdown);
-    const std::vector<std::string> expected = {"Route Screen", "S A C D", "Parse Out", "Flag Back"};
-    check(fences.size() == expected.size(), "the fixture has four Mermaid fences");
+    const std::vector<std::string> expected = {"Route Screen", "S A C D", "Parse Out", "Flag Back",
+                                               "E", "Arrow Dotted DottedOpen ThickText"};
+    check(fences.size() == expected.size(), "the fixture has six Mermaid fences");
     for (size_t i = 0; i < fences.size() && i < expected.size(); ++i) {
         auto parsed = mermaid::parse(fences[i]);
         if (!parsed.success) {
@@ -1073,6 +1155,7 @@ int main(int argc, char** argv) {
     testC4CrowdedLabels();
     testC4LabelFixture();
     testAsymmetricShape();
+    testLongLinks();
     testAsymmetricFixture();
     testFiles(argc, argv);
 

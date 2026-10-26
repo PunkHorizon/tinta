@@ -96,11 +96,67 @@ std::string_view readWord(std::string_view value, size_t& position) {
     return value.substr(start, position - start);
 }
 
+// A Mermaid link. A longer one (--->, ===>, -..->, ----) is the same edge
+// as its short form: Mermaid stretches it over more ranks, which Tinta's
+// layout does not, since an edge across ranks would go round them.
+struct Link {
+    size_t length = 0;         // 0: no whole link here
+    bool unsupported = false;  // circle or cross ends, ~~~: not drawn
+    bool directed = false;
+    bool dashed = false;
+    float strokeScale = 1.0f;
+};
+
+// The link at position, or the end of dotted edge text (.->, ..-) when
+// dottedEnd is set
+Link linkAt(std::string_view value, size_t position, bool dottedEnd = false) {
+    auto at = [&](size_t i) { return i < value.size() ? value[i] : '\0'; };
+    Link link;
+    size_t end = position;
+    const char first = at(position);
+    if (dottedEnd || (first == '-' && at(position + 1) == '.')) {
+        // Dotted: -.- and -.->, with any number of dots
+        end = dottedEnd ? position : position + 1;
+        if (at(end) != '.') return link;
+        while (at(end) == '.') end++;
+        if (at(end) != '-') return link;  // "-." opens dotted edge text
+        end++;
+        link.dashed = true;
+    } else if (first == '-' || first == '=') {
+        // Solid and thick: two or more before a '>', three or more open
+        while (at(end) == first) end++;
+        if (end - position < 2) return link;
+        link.strokeScale = first == '=' ? 2.0f : 1.0f;
+        if (at(end) != '>' && end - position < 3) {
+            // "--" and "==" open edge text, but --o and --x are ends
+            link.unsupported = at(end) == 'o' || at(end) == 'x';
+            return link;
+        }
+    } else {
+        while (at(end) == '~') end++;
+        link.unsupported = end - position >= 3;  // ~~~, an invisible link
+        return link;
+    }
+    if (at(end) == '>') {
+        link.directed = true;
+        end++;
+    } else if (at(end) == 'o' || at(end) == 'x') {
+        link.unsupported = true;
+        return link;
+    }
+    link.length = end - position;
+    return link;
+}
+
+// "-- text -->", "== text ==>" and "-. text .->" open with two characters
+bool opensLinkText(std::string_view value, size_t position) {
+    return startsWithAt(value, position, "--") || startsWithAt(value, position, "==") ||
+           startsWithAt(value, position, "-.");
+}
+
 bool isArrowAt(std::string_view value, size_t position) {
-    return startsWithAt(value, position, "-->") ||
-        startsWithAt(value, position, "---") ||
-        startsWithAt(value, position, "-.->") ||
-        startsWithAt(value, position, "==>");
+    const Link link = linkAt(value, position);
+    return link.length > 0 || link.unsupported || opensLinkText(value, position);
 }
 
 // The ']' closing the unquoted label of an asymmetric node (id>text])
@@ -377,15 +433,15 @@ bool parseNodeSpec(std::string_view line, size_t& position, size_t sourceOffset,
     while (position < line.size()) {
         char c = line[position];
         if (isSpace(c) || c == '[' || c == '(' || c == '{' || c == '>' ||
-            c == ':' || c == ';' || c == ',') {
+            c == '<' || c == ':' || c == ';' || c == ',') {
             break;
         }
         if (isArrowAt(line, position)) break;
         position++;
     }
 
-    // A '>' straight after '-' or '=' heads an arrow the parser does not
-    // read (--->, -..->, ->), not an asymmetric node
+    // A '>' straight after '-' or '=' heads an arrow Mermaid does not have
+    // (->, =>), not an asymmetric node
     if (position > 0 && position < line.size() && line[position] == '>' &&
         (line[position - 1] == '-' || line[position - 1] == '=')) {
         error = "Unsupported edge syntax";
@@ -532,36 +588,41 @@ bool parseArrow(std::string_view line, size_t& position, ArrowSpec& arrow,
         }
     }
 
-    if (startsWithAt(line, position, "-.->")) {
-        arrow.directed = true;
-        arrow.dashed = true;
-        position += 4;
-    } else if (startsWithAt(line, position, "==>")) {
-        arrow.directed = true;
-        arrow.strokeScale = 2.0f;
-        position += 3;
-    } else if (startsWithAt(line, position, "-->")) {
-        arrow.directed = true;
-        position += 3;
-    } else if (startsWithAt(line, position, "---")) {
-        arrow.directed = false;
-        position += 3;
-    } else if (startsWithAt(line, position, "--")) {
-        // "-- text -->": a quoted text may hold anything, an arrow included
+    Link link = linkAt(line, position);
+    if (link.unsupported) {
+        error = "Unsupported edge syntax";
+        return false;
+    }
+    if (link.length > 0) {
+        position += link.length;
+    } else if (opensLinkText(line, position)) {
+        // "-- text -->", "== text ==>", "-. text .->": the text runs to the
+        // first link of its own kind; a quoted text may hold anything, an
+        // arrow included
+        const char kind = line[position + 1];
         size_t textStart = position + 2;
         skipSpaces(line, textStart);
-        size_t endArrow = line.find("-->", skipQuotedString(line, textStart));
-        if (endArrow == std::string_view::npos) {
+        size_t textEnd = skipQuotedString(line, textStart);
+        for (; textEnd < line.size(); textEnd++) {
+            link = linkAt(line, textEnd, kind == '.');
+            if (link.length > 0 && (kind == '.' || (!link.dashed &&
+                                                    (link.strokeScale > 1.0f) == (kind == '=')))) {
+                break;
+            }
+        }
+        if (textEnd >= line.size()) {
             error = "Unsupported edge syntax";
             return false;
         }
-        arrow.directed = true;
-        arrow.label = decodeEdgeLabel(line.substr(position + 2, endArrow - position - 2));
-        position = endArrow + 3;
+        arrow.label = decodeEdgeLabel(line.substr(position + 2, textEnd - position - 2));
+        position = textEnd + link.length;
     } else {
         error = "Expected a Mermaid edge";
         return false;
     }
+    arrow.directed = link.directed;
+    arrow.dashed = link.dashed;
+    arrow.strokeScale = link.strokeScale;
 
     skipSpaces(line, position);
     if (position < line.size() && line[position] == '|') {

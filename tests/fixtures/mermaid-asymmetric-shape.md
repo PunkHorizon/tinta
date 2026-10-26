@@ -78,6 +78,36 @@ flowchart RL
 
 - Tinta used to draw that as one rectangle labelled `S>Screen]`.
 
+## Longer links
+
+Mermaid's own example of a longer link, `---->|No|`, with its end node made
+asymmetric:
+
+```mermaid
+flowchart TD
+    A[Start] --> B{Is it?}
+    B -->|Yes| C[OK]
+    C --> D[Rethink]
+    D --> B
+    B ---->|No| E>End]
+```
+
+Each kind of link drawn longer than its shortest form, with and without a
+head or text. A longer link is drawn like its short form.
+
+```mermaid
+flowchart TD
+    Start([Start]) ---> Arrow>Arrow]
+    Start ===> Thick[Thick]
+    Start -..-> Dotted>Dotted]
+    Arrow ---- Open[Open]
+    Thick ==== ThickOpen[Thick open]
+    Dotted -..- DottedOpen>Dotted open]
+    Open -- text ---> Text[Text]
+    ThickOpen == text ===> ThickText>Thick text]
+    DottedOpen -. text ..-> DottedText[Dotted text]
+```
+
 ## After the diagrams
 
 Text after the last diagram still lays out, with **bold**, *italic* and

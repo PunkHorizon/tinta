@@ -20,11 +20,10 @@ whole fence showed its source.
   keeps `;` and `|`, as a bracketed label does: the statement splitter
   skips from a `>` that follows a node ID to its `]`, unless an arrow or the
   line's end comes first.
-- A `>` straight after `-` or `=` heads an arrow the parser does not read
-  (`--->`, `-..->`, `->`). It fails as an unsupported edge instead of
-  opening a node: Mermaid's own `B ---->|No| E[End]` would otherwise have
-  drawn a node named `-` labelled `|No| E[End`. It shows its source, as
-  before.
+- A `>` straight after `-` or `=` heads an arrow Mermaid does not have
+  (`->`, `=>`). It fails as an unsupported edge instead of opening a node.
+  Longer links such as Mermaid's own `B ---->|No| E[End]` showed their
+  source after this change; the follow-up below reads them.
 - Outline: (0,0) (w,0) (w,h) (0,h) and the notch's tip at (h/2,h/2).
   `mermaid::leftNotch` holds the depth for the viewer and the exports. The
   node is widened by the notch and its label is centred in the rectangle
@@ -62,21 +61,22 @@ depth is the one factor in `mermaid::leftNotch`.
   quoted labels with `>` in this shape and others. Each has exactly nodes A
   and B, the expected asymmetric ones, and one directed edge with the
   expected label; `==>` stays thick and `-.->` dotted. A `>` after a letter
-  in edge text opens no label. `A --o B`, `A --x B`, `B ---->|No| E[End]`,
-  `A--->B` and `A->B` show their source as unsupported edges.
-- `mermaid_parser`, `testAsymmetricFixture`: the fixture's four fences
+  in edge text opens no label. `A->B` shows its source as an unsupported
+  edge.
+- `mermaid_parser`, `testAsymmetricFixture`: the fixture's six fences
   parse, with exactly the asymmetric nodes they show.
 - `code_block_layout`, `testMermaidAsymmetricShape`, on
   `tests/fixtures/mermaid-asymmetric-shape.md` in Paper and Midnight, at
-  scale 1 and 1.5, at 1050 and 650 px: the four fences draw. Each of the
-  ten asymmetric nodes is a path whose fill leaves the notch out and whose
+  scale 1 and 1.5, at 1050 and 650 px: the six fences draw. Each of the
+  fifteen asymmetric nodes is a path whose fill leaves the notch out and whose
   bounds are the node's; its label keeps its lines, stays right of the tip
   and is centred beside it; every edge end at the node lies on the outline
   (within half a pixel); six edges meet a tip. The exports' polygons are
   the five points exactly, with the label centred beside the notch and
   the same six edges at the tips.
 
-Neutering, each with the tests kept:
+Neutering, each with the tests kept, measured before the longer-links
+follow-up (four fences, ten asymmetric nodes):
 
 - Parser reverted: 21 `mermaid_parser` failures (every `>` shape case, the
   longer-arrow and `->` cases, all four fixture fences) and 56 layout
@@ -96,7 +96,8 @@ with or without the change, because of Remote Desktop's clipboard sync.
 ## Visual check
 
 Portable copies of the Release `tinta.exe` in `out/asymmetric-shape/`
-(ignored), with `settings.ini` beside them:
+(ignored), with `settings.ini` beside them, on the fixture's first four
+fences:
 
 - `--printpages`, Paper (theme 0) and Midnight (theme 5): three pages each.
   The notches, centred labels, styled nodes (`style` and `classDef`), the
@@ -119,13 +120,46 @@ The capture caught two faults, both fixed: the "Show screen" wrap above,
 and the fixture's `style` line, whose light fill kept Midnight's light text
 until it was given a `color`.
 
+## Longer links
+
+A follow-up reads Mermaid's longer links instead of showing their source,
+which the shape change had started doing for them.
+
+- One scanner reads every link: `-{2,}>` and `={2,}>` arrows, `-.->` with
+  any number of dots, open `-{3,}`, `={3,}` and `-.-` (any dots), and the
+  edge-text forms `-- text --->`, `== text ===>`, `-. text ..->` and their
+  open closings, each closed by a link of its own kind. `A ---->|text| B`
+  takes its pipe label as before. `-- text --->` used to keep a `-` of the
+  closing arrow in its label.
+- A longer link is drawn like its short form. Mermaid also stretches it
+  over more ranks; Tinta ignores the length, because its layout routes an
+  edge across ranks round the nodes in a side lane, which would turn a
+  straight edge into a detour.
+- Links Tinta has never drawn still show the source: `->`, `--o`, `--x`,
+  `<-->`, `o--o`, `x--x`, `~~~`, and open links ending in `o` or `x`
+  (`---o`, `==x`, `-.-o`). Written without spaces (`A<-->B`, `Ao--oB`,
+  `A~~~B`) they no longer pass for part of a node ID, and `A --o B --> C`
+  is no longer read as edge text.
+- `mermaid_parser`, `testLongLinks`: 31 links, each with exactly nodes A and
+  B and one edge that is directed, dotted, thick and labelled as its short
+  form would be, the asymmetric shape and `>` in labels included; Mermaid's
+  own `B ---->|No| E[End]` example; 15 links that show their source.
+- `code_block_layout`: the fixture's new "Longer links" section (Mermaid's
+  example and a diagram of every kind) draws; its nine edges are three
+  dotted, three thick and three open.
+- Neutering (the parser of the shape change): 36 `mermaid_parser` failures
+  and 24 layout failures (the two new fences fall back to source).
+- `--printpages`, Paper: the section's two diagrams with every head, stroke
+  and label as its short form draws them. In Mermaid's example End sits
+  low, in a side lane: the diagram has a cycle, whose nodes Tinta ranks in
+  source order, not because of the length.
+- Every flowchart fence in the repository's Markdown (14) still parses.
+
 ## Limits
 
 - Mermaid 11 draws a notch half as deep (h/4); see above.
 - Edges from above and below meet the node at its centre, a quarter of the
   height left of the label's centre, so that straight runs stay straight.
-- `--o`, `--x` and longer links (`--->`, `==>` with more `=`) are not read;
-  such a fence shows its source, as before.
 - The other approximated shapes are unchanged: `[(` (cylinder) draws as a
   rounded rectangle, `[[` (subroutine) and `[/ /]`, `[\ \]` (parallelograms)
   as plain rectangles.
