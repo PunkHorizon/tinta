@@ -97,10 +97,15 @@ void syncPreviewToEditor(App& app);
 void editorFollowPreview(App& app);
 
 // Ctrl+G, go to line (#276): a prompt over the editor or the reading view.
-// While open it takes every key; Enter jumps, Esc closes.
+// While open it takes every key; Enter jumps, Esc closes. The key-down
+// consumes only those and Backspace, so the message loop turns the other
+// keys into the characters gotoLineChar types (#282).
 void gotoLineOpenPrompt(App& app);
 bool gotoLineKeyDown(App& app, HWND hwnd, WPARAM key);
 void gotoLineChar(App& app, wchar_t ch);
+// The prompt's box, and whether a point in client pixels falls on it
+D2D1_RECT_F gotoLinePromptBox(const App& app);
+bool gotoLinePromptHit(const App& app, float x, float y);
 // Lines in the document being edited or read
 size_t gotoLineCount(const App& app);
 // 1-based, clamped to the document: the editor's caret moves to the line's

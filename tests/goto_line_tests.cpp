@@ -3,6 +3,7 @@
 #include "editor.h"
 #include "frame_preview.h"
 #include "input.h"
+#include "keystroke.h"
 #include "render.h"
 #include "settings.h"
 #include "utils.h"
@@ -21,23 +22,15 @@ void check(bool ok, const std::string& message) {
     if (!ok) { if (failures < 40) std::cerr << "FAIL go to line: " << message << '\n'; ++failures; }
 }
 
-void key(App& app, unsigned vk, bool ctrl = false) {
-    BYTE original[256], pressed[256];
-    GetKeyboardState(original);
-    memcpy(pressed, original, sizeof pressed);
-    pressed[VK_CONTROL] = ctrl ? 0x80 : 0;
-    pressed[VK_SHIFT] = pressed[VK_MENU] = 0;
-    SetKeyboardState(pressed);
-    handleKeyDown(app, app.hwnd, vk);
-    SetKeyboardState(original);
+// Keys as the message loop delivers them: a key-down the prompt consumes
+// makes no character, so the digits reach it only if it leaves their
+// key-downs unconsumed (#282). Returns whether the key-down was consumed.
+bool key(App& app, unsigned vk, bool ctrl = false) {
+    return keystroke(app, vk, {ctrl});
 }
 
-// What Windows sends for typed text: a key-down, then its character
 void type(App& app, const std::wstring& text) {
-    for (wchar_t c : text) {
-        key(app, (unsigned)towupper(c));
-        handleCharInput(app, app.hwnd, c);
-    }
+    typeKeys(app, text);
 }
 
 void paint(App& app) {
@@ -64,6 +57,14 @@ size_t caretLine(const App& app) {
     return line + 1;
 }
 
+// A press and release in the middle of the prompt's box
+void clickPrompt(App& app) {
+    const D2D1_RECT_F box = gotoLinePromptBox(app);
+    const LPARAM inside = MAKELPARAM((int)((box.left + box.right) / 2), (int)((box.top + box.bottom) / 2));
+    handleMouseDown(app, app.hwnd, MK_LBUTTON, inside);
+    handleMouseUp(app, app.hwnd, 0, inside);
+}
+
 void inEditor(App& app, const char* path, int width, bool wrap) {
     const std::string where = " (" + std::to_string(width) + (wrap ? ", wrap)" : ")");
     app.width = width;
@@ -76,16 +77,15 @@ void inEditor(App& app, const char* path, int width, bool wrap) {
     paint(app);
     const size_t lines = app.editorLineStarts.size();
     for (size_t target : {120u, 41u, 7u, 190u}) {
-        key(app, 'G', true);
+        check(key(app, 'G', true), "Ctrl+G is consumed, so its own character types nothing" + where);
         check(app.gotoLineOpen, "Ctrl+G opens the prompt" + where);
-        handleCharInput(app, app.hwnd, 0x07);  // Ctrl+G's own character
         type(app, std::to_wstring(target));
+        check(app.gotoLineInput == std::to_wstring(target), "the typed number shows in the prompt" + where);
         paint(app);
         const std::string preview = previewName(app, wrap ? "editor-wrap" : "editor", width);
         if (target == 120) savePreview(app, preview + "-prompt");
         const std::wstring before = app.editorText;
-        key(app, VK_RETURN);
-        handleCharInput(app, app.hwnd, L'\r');  // Enter's character follows
+        check(key(app, VK_RETURN), "Enter is consumed, so its character makes no new line" + where);
         check(!app.gotoLineOpen, "Enter closes the prompt" + where);
         check(app.editorText == before, "Enter's character does not reach the text" + where);
         check(caretLine(app) == target, "the caret lands on line " + std::to_string(target) + where);
@@ -112,14 +112,32 @@ void inEditor(App& app, const char* path, int width, bool wrap) {
     type(app, L"33");
     key(app, VK_ESCAPE);
     check(!app.gotoLineOpen && caretLine(app) == 1, "Esc closes the prompt without moving" + where);
-    // A click elsewhere puts it away
+    // A click on the prompt keeps it and its digits, and stays out of the
+    // text beneath (#282); a click elsewhere puts it away
     key(app, 'G', true);
+    type(app, L"12");
+    const size_t caret = app.editorCursorPos;
+    clickPrompt(app);
+    check(app.gotoLineOpen && app.gotoLineInput == L"12", "a click on the prompt keeps it open" + where);
+    check(app.editorCursorPos == caret && !app.editorHasSelection && !app.editorSelecting,
+          "a click on the prompt leaves the caret where it was" + where);
     handleMouseDown(app, app.hwnd, MK_LBUTTON, MAKELPARAM(300, 400));
     handleMouseUp(app, app.hwnd, 0, MAKELPARAM(300, 400));
     check(!app.gotoLineOpen, "a click elsewhere closes the prompt" + where);
     // Nothing above typed into the document; if it did, the next run's
     // keys would land on the save question instead
     check(!app.editorDirty, "the prompt leaves the document unchanged" + where);
+    // The Enter that jumps leaves no character waiting to be swallowed:
+    // the next Enter starts a new line, and Ctrl+Z takes it back
+    key(app, 'G', true);
+    type(app, L"3");
+    key(app, VK_RETURN);
+    const std::wstring jumped = app.editorText;
+    const size_t jumpedLines = app.editorLineStarts.size();
+    key(app, VK_RETURN);
+    check(app.editorLineStarts.size() == jumpedLines + 1, "the Enter after a jump starts a new line" + where);
+    key(app, 'Z', true);
+    check(app.editorText == jumped, "Ctrl+Z takes the new line back" + where);
     app.editorDirty = false;
     exitEditMode(app);
 }
@@ -161,6 +179,15 @@ void inReader(App& app, const char* path, int width) {
     enterEditMode(app);
     exitEditMode(app);
     jumpToHeadings(app, "reading", width, 0);
+    // A click on the prompt keeps it, without scrolling or selecting (#282)
+    const std::string where = " (reading, " + std::to_string(width) + ")";
+    key(app, 'G', true);
+    type(app, L"5");
+    const float scroll = app.scrollY;
+    clickPrompt(app);
+    check(app.gotoLineOpen && app.gotoLineInput == L"5" && app.scrollY == scroll && !app.selecting,
+          "a click on the prompt keeps it open over the reading view" + where);
+    check(key(app, VK_ESCAPE) && !app.gotoLineOpen, "Esc closes the prompt" + where);
 }
 
 // Edit mode's reading view shows the editor's text, edits the viewer's

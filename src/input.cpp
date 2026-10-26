@@ -1906,8 +1906,13 @@ static void toggleApplicationMenu(App& app, HWND hwnd, bool keyboard = false) {
 void handleMouseDown(App& app, HWND hwnd, WPARAM, LPARAM lParam) {
     // A fresh press is a new gesture, even if a cancelled drag released elsewhere.
     app.swallowNextMouseUp = false;
-    // A click elsewhere puts the go-to-line prompt away (#276)
+    // A click elsewhere puts the go-to-line prompt away (#276); one on the
+    // prompt keeps it open and stays out of the text beneath (#282)
     if (app.gotoLineOpen) {
+        if (gotoLinePromptHit(app, (float)GET_X_LPARAM(lParam), (float)GET_Y_LPARAM(lParam))) {
+            app.swallowNextMouseUp = true;
+            return;
+        }
         app.gotoLineOpen = false;
         InvalidateRect(hwnd, nullptr, FALSE);
     }
@@ -3567,8 +3572,9 @@ bool handleKeyDown(App& app, HWND hwnd, WPARAM wParam) {
     float maxScroll = std::max(0.0f, app.contentHeight - app.height);
     bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
 
-    // Go to line (#276): the prompt takes every key while open; Ctrl+G
-    // opens it over the editor or the reading view of a document
+    // Go to line (#276): the prompt takes every key while open, leaving the
+    // typing ones unconsumed for their characters (#282); Ctrl+G opens it
+    // over the editor or the reading view of a document
     if (app.gotoLineOpen) return gotoLineKeyDown(app, hwnd, wParam);
     if (ctrl && wParam == 'G' && !(GetKeyState(VK_SHIFT) & 0x8000) &&
         !(GetKeyState(VK_MENU) & 0x8000) && !app.showLightbox && !app.showSettings &&
@@ -4261,11 +4267,6 @@ void handleCharInput(App& app, HWND hwnd, WPARAM wParam) {
     if (std::chrono::steady_clock::now() < app.swallowCharsUntil) return;
 
     // The go-to-line prompt takes its digits, and swallows the rest (#276)
-    if (app.gotoLineSwallowChar) {
-        const wchar_t swallow = app.gotoLineSwallowChar;
-        app.gotoLineSwallowChar = 0;
-        if ((wchar_t)wParam == swallow) return;  // the closing key's own character
-    }
     if (app.gotoLineOpen) {
         gotoLineChar(app, (wchar_t)wParam);
         InvalidateRect(hwnd, nullptr, FALSE);

@@ -4434,24 +4434,26 @@ bool gotoLineKeyDown(App& app, HWND hwnd, WPARAM key) {
         app.gotoLineOpen = false;
         app.gotoLineInput.clear();
         if (key == VK_RETURN && !typed.empty()) gotoLineJump(app, (size_t)std::wcstoull(typed.c_str(), nullptr, 10));
-        // The Enter or Esc character that follows must not reach the
-        // editor; only that one, so quick typing afterwards is kept
-        app.gotoLineSwallowChar = key == VK_RETURN ? L'\r' : (wchar_t)0x1B;
-    } else if (key == VK_BACK && !app.gotoLineInput.empty()) {
-        app.gotoLineInput.pop_back();
+    } else if (key == VK_BACK) {
+        if (!app.gotoLineInput.empty()) app.gotoLineInput.pop_back();
+    } else {
+        // Every other key stays with the prompt but is left unconsumed: the
+        // message loop translates only unconsumed keys into the characters
+        // gotoLineChar reads (#282), in whatever layout types the digits
+        return false;
     }
     InvalidateRect(hwnd, nullptr, FALSE);
-    return true;  // the prompt takes every key while it is open
+    // Consumed, so Enter, Esc and Backspace make no character for the
+    // editor once the prompt has closed
+    return true;
 }
 
 void gotoLineChar(App& app, wchar_t ch) {
     if (ch >= L'0' && ch <= L'9' && app.gotoLineInput.size() < 9) app.gotoLineInput += ch;
 }
 
-void renderGotoLinePrompt(App& app) {
-    IDWriteTextFormat* format = app.searchTextFormat;
-    if (!app.gotoLineOpen || !format) return;
-    // Centred at the top of the pane it acts on
+// Centred at the top of the pane it acts on
+D2D1_RECT_F gotoLinePromptBox(const App& app) {
     const float paneLeft = gotoLineInEditor(app) ? editRailWidth(app) : documentViewportX(app);
     const float paneWidth = gotoLineInEditor(app) ? editorPaneWidth(app) - editRailWidth(app)
                                                   : documentViewportWidth(app);
@@ -4459,7 +4461,20 @@ void renderGotoLinePrompt(App& app) {
     const float h = dpi(app, 38.0f);
     const float x = paneLeft + (paneWidth - w) * 0.5f;
     const float y = chromeTopHeight(app) + dpi(app, 12.0f);
-    const D2D1_RECT_F box = D2D1::RectF(x, y, x + w, y + h);
+    return D2D1::RectF(x, y, x + w, y + h);
+}
+
+bool gotoLinePromptHit(const App& app, float x, float y) {
+    if (!app.gotoLineOpen) return false;
+    const D2D1_RECT_F box = gotoLinePromptBox(app);
+    return x >= box.left && x < box.right && y >= box.top && y < box.bottom;
+}
+
+void renderGotoLinePrompt(App& app) {
+    IDWriteTextFormat* format = app.searchTextFormat;
+    if (!app.gotoLineOpen || !format) return;
+    const D2D1_RECT_F box = gotoLinePromptBox(app);
+    const float h = box.bottom - box.top;
     D2D1_COLOR_F shadow = D2D1::ColorF(0, 0, 0, app.theme.isDark ? 0.35f : 0.12f);
     app.brush->SetColor(shadow);
     app.renderTarget->FillRoundedRectangle(

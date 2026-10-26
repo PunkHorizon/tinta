@@ -535,8 +535,6 @@ struct App {
     // Ctrl+G's go-to-line prompt (#276): open, and the digits typed so far
     bool gotoLineOpen = false;
     std::wstring gotoLineInput;
-    // The character of the Enter or Esc that closed it, kept from the editor
-    wchar_t gotoLineSwallowChar = 0;
     // The wheel over the tab strip steps through tabs (#272): notches of a
     // high-resolution wheel or touchpad add up here, and a pause resets
     float tabWheelAccum = 0.0f;

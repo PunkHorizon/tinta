@@ -14,9 +14,11 @@ A way to jump to a line by its number, as Ctrl+G does in most editors.
   digits typed so far with a caret, and the range `1–N`.
 - While open the prompt takes every key: digits are typed (up to nine),
   Backspace removes one, other characters are ignored, **Enter** jumps and
-  **Esc** closes. A click anywhere closes it. The Enter or Esc character
-  that follows the key is kept from the editor, without the blanket
-  character pause, so quickly typed digits still arrive.
+  **Esc** closes. A click elsewhere closes it; a click on the prompt keeps
+  it open (#282). Enter, Esc and Backspace are consumed on their key-down,
+  so they make no character for the editor; every other key is left
+  unconsumed, so the message loop translates it into the character the
+  prompt reads (#282).
 - In the editor the caret moves to the start of the line, carets and the
   selection are cleared, and the line is placed about 40 % down the view.
 - In the reading view the page scrolls to where the line's block is drawn,
@@ -96,3 +98,69 @@ neutering check, typed newlines into the fixture, and the next run's Enter
 answered the save question and wrote them to disk. The fixture was
 restored, and the test now works on a copy and checks that the document
 stays unmodified.
+
+# Typing into the prompt (#282)
+
+Validated on Windows with the Release build on 2026-10-26.
+
+## Report
+
+In v3.9.2, Ctrl+G opened the prompt but no digit could be typed into it,
+and a click on the prompt closed it.
+
+## Cause
+
+The main message loop translates a key-down into its `WM_CHAR` only when
+no command consumed the key (#195). The prompt's key-down handler returned
+"consumed" for every key, so no digit ever became a character. The tests
+missed it because their `type()` handed each character to the handler
+whatever the key-down returned, and the real-window check used
+`SendMessage`, which skips the message loop altogether.
+
+Closing with Enter or Esc also left that key's character waiting to be
+swallowed. Since a consumed Enter makes no character, the flag stayed set
+and ate the next Enter typed in the editor, as soon as the prompt could
+jump at all.
+
+## Change
+
+- The prompt consumes only Enter, Esc and Backspace. Every other key stays
+  with it (no other shortcut sees it) but is left unconsumed, so the loop
+  translates digits in whatever layout types them.
+- The swallowed-character flag is gone: consumed keys make no character.
+- A press on the prompt keeps it open and is kept from the text below; a
+  press elsewhere still closes it.
+
+## Automated checks
+
+`goto_line` now types through `tests/keystroke.h`, which delivers a key's
+character only when the key-down leaves it unconsumed, as the loop does:
+
+- Ctrl+G is consumed, the typed number shows in the prompt, and Enter is
+  consumed, in every editor and reading-view run;
+- after a jump, the next Enter starts a new line and Ctrl+Z takes it back;
+- a click in the middle of the prompt keeps it open with its digits,
+  without moving the caret or selecting, in the editor and the reading view.
+
+Neutering checks:
+
+- consuming every key again fails 304 checks: the typed numbers, the caret
+  lines, the reading-view scrolls and the click checks;
+- restoring the swallowed Enter fails "the Enter after a jump starts a new
+  line" in all eight editor runs.
+
+## Real window
+
+Keys were posted to the window, so they went through `GetMessage`,
+`TranslateMessage` and the loop's consumed check, with Ctrl held through
+attached thread input. Each build ran as a portable copy with isolated
+settings on a copy of `goto-line-276.md`: E to edit, Ctrl+G, 1 2 0, Enter,
+then Ctrl+G, a click on the prompt and 5.
+
+- v3.9.2: the prompt stayed empty; the click closed it and the 5 was typed
+  into the document as a new line 2.
+- With the fix: the prompt showed 120, Enter brought line 120 into view,
+  and after the click the prompt stayed open showing 5. The file was left
+  unmodified.
+
+Captures are in `out/verify-282`.
