@@ -8,12 +8,16 @@
 #include "utils.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <memory>
+#include <set>
+#include <tuple>
 
 namespace {
 int failures = 0;
@@ -147,6 +151,175 @@ void testMermaidMultilineLabels(App& app) {
         ++found;
     }
     check(found >= 25, "the diagrams' labels are laid out (" + std::to_string(found) + ")");
+}
+
+// Mermaid's asymmetric outline around a node: (0,0) (w,0) (w,h) (0,h), then
+// the notch's tip at (h/2,h/2)
+std::array<D2D1_POINT_2F, 5> asymmetricOutline(float left, float top, float right, float bottom) {
+    const float h = bottom - top;
+    return {{{left, top}, {right, top}, {right, bottom}, {left, bottom},
+             {left + h * 0.5f, top + h * 0.5f}}};
+}
+
+float outlineDistance(D2D1_POINT_2F p, const std::array<D2D1_POINT_2F, 5>& outline) {
+    float nearest = std::numeric_limits<float>::max();
+    for (size_t i = 0; i < outline.size(); ++i) {
+        const auto a = outline[i], b = outline[(i + 1) % outline.size()];
+        const float dx = b.x - a.x, dy = b.y - a.y;
+        const float t = std::clamp(((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy),
+                                   0.0f, 1.0f);
+        nearest = std::min(nearest, std::hypot(a.x + t * dx - p.x, a.y + t * dy - p.y));
+    }
+    return nearest;
+}
+
+bool atPoint(float x, float y, D2D1_POINT_2F point) {
+    return std::hypot(x - point.x, y - point.y) < 0.5f;
+}
+
+// Mermaid's asymmetric shape, id>text]: in the app's layout each node is the
+// notched outline (one geometry, which the screen and print both draw), its
+// label keeps to the rectangle beside the notch, and every edge ends on the
+// outline, at the notch's tip when it meets the left side. The HTML and Word
+// exports draw the same polygon.
+void testMermaidAsymmetricShape(App& app) {
+    std::ifstream file(TINTA_MERMAID_ASYMMETRIC_FIXTURE, std::ios::binary);
+    check(file.good(), "Mermaid asymmetric shape fixture is available");
+    std::string source((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    app.root = app.parser.parse(source).root;
+    layoutDocument(app);
+    ensureLayoutComplete(app);
+    std::vector<D2D1_RECT_F> diagrams;
+    for (const auto& block : app.codeBlocks) {
+        if (block.isDiagram) diagrams.push_back(block.bounds);
+    }
+    check(diagrams.size() == 4, "the fixture's four Mermaid fences draw as diagrams");
+    check(app.docText.find(L"Text after the last diagram") != std::wstring::npos,
+          "text after the last diagram lays out");
+
+    auto contains = [](const D2D1_RECT_F& outer, const D2D1_RECT_F& inner) {
+        return outer.left <= inner.left + 0.01f && outer.top <= inner.top + 0.01f &&
+               outer.right >= inner.right - 0.01f && outer.bottom >= inner.bottom - 0.01f;
+    };
+    auto area = [](const D2D1_RECT_F& r) { return (r.right - r.left) * (r.bottom - r.top); };
+    const std::vector<std::wstring> labels = {
+        L"Route request", L"Show screen", L"Screen", L"Quoted > label", L"Two lines\nof label",
+        L"One; two | three", L"Parse", L"Output", L"Flag", L"Back again"};
+    size_t found = 0, tips = 0;
+    for (const auto& run : app.layoutTextRuns) {
+        if (!run.layout || run.docStart + run.docLength > app.docText.size()) continue;
+        const std::wstring text = app.docText.substr(run.docStart, run.docLength);
+        if (std::find(labels.begin(), labels.end(), text) == labels.end() ||
+            std::none_of(diagrams.begin(), diagrams.end(),
+                         [&](const D2D1_RECT_F& d) { return contains(d, run.bounds); })) {
+            continue;
+        }
+        ++found;
+        std::string name = toUtf8(text);
+        std::replace(name.begin(), name.end(), '\n', '|');
+        name = "\"" + name + "\"";
+
+        // The node is the smallest shape around its label; a group box is larger
+        const App::LayoutShape* node = nullptr;
+        for (const auto& shape : app.layoutShapes) {
+            if (contains(shape.rect, run.bounds) && (!node || area(shape.rect) < area(node->rect))) {
+                node = &shape;
+            }
+        }
+        check(node && node->type == App::LayoutShapeType::Path && node->geometry,
+              name + " is drawn as its notched outline");
+        if (!node) continue;
+        const D2D1_RECT_F r = node->rect;
+        const float w = r.right - r.left, h = r.bottom - r.top, notch = h * 0.5f;
+
+        // In the shape's own space: the notch is cut out of the left side,
+        // the rest is filled
+        if (node->geometry) {
+            D2D1_RECT_F bounds{};
+            node->geometry->GetBounds(nullptr, &bounds);
+            check(std::abs(bounds.left) < 0.05f && std::abs(bounds.top) < 0.05f &&
+                      std::abs(bounds.right - w) < 0.05f && std::abs(bounds.bottom - h) < 0.05f,
+                  name + "'s outline spans its node");
+            auto filled = [&](float x, float y) {
+                BOOL inside = FALSE;
+                node->geometry->FillContainsPoint(D2D1::Point2F(x, y), nullptr, &inside);
+                return inside == TRUE;
+            };
+            check(!filled(2.0f, notch) && !filled(notch - 2.0f, notch) &&
+                      filled(notch + 2.0f, notch) && filled(w - 2.0f, notch) &&
+                      filled(notch * 0.5f, 2.0f) && filled(notch * 0.5f, h - 2.0f),
+                  name + " has its notch on the left, its tip half the height in");
+        }
+
+        // The label keeps to the rectangle beside the notch, centred in it,
+        // in its own lines
+        DWRITE_TEXT_METRICS metrics{};
+        run.layout->GetMetrics(&metrics);
+        const UINT32 lines = 1 + (UINT32)std::count(text.begin(), text.end(), L'\n');
+        check(metrics.lineCount == lines,
+              name + " keeps " + std::to_string(lines) + " line(s), laid out in " +
+                  std::to_string(metrics.lineCount));
+        const float textLeft = run.pos.x + metrics.left;
+        check(textLeft >= r.left + notch && textLeft + metrics.width <= r.right,
+              name + " stays out of the notch");
+        check(std::abs((run.bounds.left + run.bounds.right) - (r.left + notch + r.right)) < 1.0f,
+              name + " is centred beside the notch");
+
+        // Every edge end at the node is on the outline
+        const auto outline = asymmetricOutline(r.left, r.top, r.right, r.bottom);
+        for (const auto& connector : app.layoutConnectors) {
+            if (connector.points.empty()) continue;
+            for (const auto& end : {connector.points.front(), connector.points.back()}) {
+                if (end.x < r.left - 1.0f || end.x > r.right + 1.0f ||
+                    end.y < r.top - 1.0f || end.y > r.bottom + 1.0f) {
+                    continue;
+                }
+                check(outlineDistance(end, outline) < 0.5f,
+                      "an edge of " + name + " ends on its outline, not " +
+                          std::to_string(outlineDistance(end, outline)) + " px off");
+                if (atPoint(end.x, end.y, outline[4])) ++tips;
+            }
+        }
+    }
+    check(found == labels.size(),
+          "the ten asymmetric labels are laid out (" + std::to_string(found) + ")");
+    // Into S, C, D, Parse and Output from the left, out of Flag leftwards
+    check(tips == 6, "six edges meet a notch's tip (" + std::to_string(tips) + ")");
+
+    // The exports' polygon, label and edges
+    std::set<std::tuple<size_t, float, float>> polygons;  // diagram, left, top
+    size_t exportTips = 0;
+    for (size_t b = 0; b < app.codeBlocks.size(); ++b) {
+        if (!app.codeBlocks[b].isDiagram) continue;
+        const auto built = buildFlowchartPrims(app, toUtf8(app.codeBlocks[b].codeText), 1.0f);
+        check(built.ok, "fixture diagram " + std::to_string(b) + " builds for export");
+        for (const auto& prim : built.prims) {
+            if (prim.type != mermaidext::PrimType::Polygon || prim.pts.size() != 5) continue;
+            const auto& p = prim.pts;
+            const auto outline = asymmetricOutline(p[0].x, p[0].y, p[2].x, p[2].y);
+            bool exact = true;
+            for (size_t i = 0; i < outline.size(); ++i) exact = exact && atPoint(p[i].x, p[i].y, outline[i]);
+            check(exact, "the export's polygon runs (0,0) (w,0) (w,h) (0,h) (h/2,h/2)");
+            // A styled node's fill and stroke are two prims of one node
+            if (!polygons.insert({b, p[0].x, p[0].y}).second) continue;
+            for (const auto& other : built.prims) {
+                if (other.type == mermaidext::PrimType::Text && other.x1 >= p[0].x &&
+                    other.x2 <= p[2].x && other.y1 >= p[0].y && other.y2 <= p[2].y) {
+                    check(other.x1 >= outline[4].x &&
+                              std::abs((other.x1 + other.x2) - (outline[4].x + p[2].x)) < 1.0f,
+                          "the export centres the label beside the notch");
+                }
+                // An edge's axis-aligned segment, not an arrowhead's wing
+                if (other.type == mermaidext::PrimType::Line && std::abs(other.y1 - other.y2) < 0.01f &&
+                    (atPoint(other.x1, other.y1, outline[4]) || atPoint(other.x2, other.y2, outline[4]))) {
+                    ++exportTips;
+                }
+            }
+        }
+    }
+    check(polygons.size() == labels.size(),
+          "the export draws the ten asymmetric nodes (" + std::to_string(polygons.size()) + ")");
+    check(exportTips == 6, "six exported edges meet a notch's tip (" + std::to_string(exportTips) + ")");
 }
 
 // C4 relation labels, measured with the app's fonts: every diagram of the
@@ -318,6 +491,7 @@ int main() {
                     testMermaidFrontMatter(app);
                     testMermaidMultilineLabels(app);
                     testMermaidC4Labels(app);
+                    testMermaidAsymmetricShape(app);
                 }
             }
         }

@@ -385,6 +385,15 @@ mermaidext::Prim flowShapePrim(const mermaid::Node& node,
                          {rect.left, rect.top + h * 0.5f}};
             break;
         }
+        case mermaid::NodeShape::Asymmetric:
+            shape.type = PrimType::Polygon;
+            shape.pts = {{rect.left, rect.top},
+                         {rect.right, rect.top},
+                         {rect.right, rect.bottom},
+                         {rect.left, rect.bottom},
+                         {rect.left + mermaid::leftNotch(node.shape, h),
+                          rect.top + h * 0.5f}};
+            break;
         case mermaid::NodeShape::Circle:
             shape.type = PrimType::Ellipse;
             shape.x1 = rect.left;
@@ -459,6 +468,7 @@ mermaidext::Built buildFlowchartPrims(App& app, const std::string& source,
             width = diameter;
             height = diameter;
         }
+        width += mermaid::leftNotch(node.shape, height);
         labels.push_back(std::move(label));
         nodeSizes.push_back({width, height});
         styles.push_back(flowResolveStyle(app, diagram, node, scale));
@@ -569,6 +579,12 @@ mermaidext::Built buildFlowchartPrims(App& app, const std::string& source,
         boundsR = std::max(boundsR, box.right);
         boundsB = std::max(boundsB, box.bottom);
     }
+    // A node's left side at mid-height, where a notch has its tip
+    auto leftSide = [&](size_t node) {
+        const auto& rect = nodeRects[node];
+        return rect.left + mermaid::leftNotch(diagram.nodes[node].shape,
+                                              rect.bottom - rect.top);
+    };
     size_t exteriorLane = 0;
     std::vector<mermaid::Rect> placedLabelRects;
     placedLabelRects.reserve(diagram.edges.size());
@@ -661,9 +677,9 @@ mermaidext::Built buildFlowchartPrims(App& app, const std::string& source,
                 };
             } else if (forward) {
                 D2D1_POINT_2F start = D2D1::Point2F(
-                    leftToRight ? from.right : from.left, fromCenterY);
+                    leftToRight ? from.right : leftSide(edge.from), fromCenterY);
                 D2D1_POINT_2F end = D2D1::Point2F(
-                    leftToRight ? to.left : to.right, toCenterY);
+                    leftToRight ? leftSide(edge.to) : to.right, toCenterY);
                 float middleX = (start.x + end.x) * 0.5f;
                 conn.points = {
                     start,
@@ -894,7 +910,8 @@ mermaidext::Built buildFlowchartPrims(App& app, const std::string& source,
         } else {
             label.fill = Role::Text;
         }
-        label.x1 = rect.left + insetX;
+        label.x1 = rect.left +
+                   mermaid::leftNotch(node.shape, rect.bottom - rect.top) + insetX;
         label.y1 = rect.top + insetY;
         label.x2 = rect.right - insetX;
         label.y2 = rect.bottom - insetY;

@@ -522,6 +522,153 @@ void testFrontMatterFixture() {
           "a flowchart error after front matter reports its own line");
 }
 
+// The ids of a diagram's asymmetric nodes, in order, separated by spaces
+std::string asymmetricIds(const mermaid::Diagram& diagram) {
+    std::string ids;
+    for (const auto& node : diagram.nodes) {
+        if (node.shape != mermaid::NodeShape::Asymmetric) continue;
+        if (!ids.empty()) ids += ' ';
+        ids += node.id;
+    }
+    return ids;
+}
+
+// id>text] is Mermaid's asymmetric shape. It drew as one rectangle whose id
+// and label were the whole "S>Screen]".
+void testAsymmetricShape() {
+    auto screen = mermaid::parse("flowchart LR\nR -.-> S>Screen]\n");
+    check(screen.success, "an edge to an asymmetric node parses");
+    if (screen.success) {
+        const auto* node = findNode(screen.diagram, "S");
+        check(node && node->label == "Screen" &&
+                  node->shape == mermaid::NodeShape::Asymmetric,
+              "S>Screen] is node S, labelled Screen, asymmetric");
+        check(screen.diagram.nodes.size() == 2 && screen.diagram.edges.size() == 1 &&
+                  screen.diagram.edges[0].dashed && findEdge(screen.diagram, "R", "S"),
+              "the dotted edge runs from R to S");
+    }
+
+    // Quoted text as for the other shapes: '>', ']' and ';' inside, a label
+    // over two lines; unquoted text keeps ';' and '|' as a bracketed one does
+    auto labels = mermaid::parse(
+        "flowchart LR\n"
+        "A>\"a > b ] c; d\"] --> B>\"first line\n   second line\"]\n"
+        "C>one; two | three] --> D; D --> E\n"
+        "F>Classed]:::hot\n"
+        "G --> H\n"
+        "H>Defined later]\n"
+        "subgraph Group\n"
+        "    I>Inside]\n"
+        "end\n");
+    check(labels.success, "asymmetric labels parse");
+    if (labels.success) {
+        const auto& diagram = labels.diagram;
+        const auto* a = findNode(diagram, "A");
+        check(a && a->label == "a > b ] c; d", "a quoted label keeps '>', ']' and ';'");
+        const auto* b = findNode(diagram, "B");
+        check(b && b->label == "first line\nsecond line", "a quoted label runs over two lines");
+        const auto* c = findNode(diagram, "C");
+        check(c && c->label == "one; two | three", "an unquoted label keeps ';' and '|'");
+        check(findEdge(diagram, "C", "D") && findEdge(diagram, "D", "E"),
+              "a ';' after the label still separates statements");
+        const auto* f = findNode(diagram, "F");
+        check(f && f->className == "hot", "a class follows the label");
+        const auto* h = findNode(diagram, "H");
+        check(h && h->label == "Defined later", "a node used before takes the shape later");
+        check(diagram.subgraphs.size() == 1 && diagram.subgraphs[0].nodes.size() == 1 &&
+                  diagram.nodes[diagram.subgraphs[0].nodes[0]].id == "I",
+              "an asymmetric node belongs to its subgraph");
+        check(asymmetricIds(diagram) == "A B C F H I", "every '>' node is asymmetric");
+    }
+
+    // A '>' that belongs to an arrow or to text never opens the shape
+    struct Case {
+        const char* line;
+        const char* asymmetric;  // ids of the asymmetric nodes
+        const char* edgeLabel;
+    };
+    const Case cases[] = {
+        {"A-->B", "", ""},
+        {"A --> B", "", ""},
+        {"A ==> B", "", ""},
+        {"A -.-> B", "", ""},
+        {"A==>B>Text]", "B", ""},
+        {"A-.->B>Text]", "B", ""},
+        {"A --> B>Text]", "B", ""},
+        {"A>Text] --> B", "A", ""},
+        {"A>Text]-->B", "A", ""},
+        {"A -- text --> B", "", "text"},
+        {"A -- a > b --> B", "", "a > b"},
+        {"A -->|a > b| B", "", "a > b"},
+        {"A>Text] -->|a > b| B>\"c > d\"]", "A B", "a > b"},
+        {"A[\"a > b\"] --> B(\"c > d\")", "", ""},
+    };
+    for (const auto& item : cases) {
+        const std::string name = std::string("'") + item.line + "'";
+        auto parsed = mermaid::parse(std::string("flowchart LR\n") + item.line + "\n");
+        check(parsed.success, (name + " parses").c_str());
+        if (!parsed.success) continue;
+        const auto& diagram = parsed.diagram;
+        check(diagram.nodes.size() == 2 && findNode(diagram, "A") && findNode(diagram, "B"),
+              (name + " has nodes A and B, and no others").c_str());
+        check(asymmetricIds(diagram) == item.asymmetric,
+              (name + " has asymmetric nodes '" + item.asymmetric + "', not '" +
+               asymmetricIds(diagram) + "'").c_str());
+        check(diagram.edges.size() == 1 && diagram.edges[0].directed &&
+                  diagram.edges[0].label == item.edgeLabel,
+              (name + " has one directed edge labelled '" + item.edgeLabel + "'").c_str());
+    }
+    auto thick = mermaid::parse("flowchart LR\nA==>B\n");
+    check(thick.success && thick.diagram.edges.size() == 1 &&
+              thick.diagram.edges[0].strokeScale == 2.0f,
+          "'A==>B' stays a thick arrow");
+    auto dotted = mermaid::parse("flowchart LR\nA-.->B\n");
+    check(dotted.success && dotted.diagram.edges.size() == 1 && dotted.diagram.edges[0].dashed,
+          "'A-.->B' stays a dotted arrow");
+
+    // In edge text, a '>' after a letter opens no label either: the ';'
+    // after the edge still separates
+    auto edgeText = mermaid::parse("flowchart LR\nA -- a>b --> B; B --> C\nC -->|x>y| D; D --> E\n");
+    check(edgeText.success && edgeText.diagram.edges.size() == 4 &&
+              edgeText.diagram.edges[0].label == "a>b" &&
+              edgeText.diagram.edges[2].label == "x>y" && asymmetricIds(edgeText.diagram).empty(),
+          "a '>' in edge text stays text");
+
+    // Circle and cross ends are not drawn natively, so those edges show
+    // their source, as before. A '>' heading a longer arrow does too, as in
+    // Mermaid's own "B ---->|No| E", rather than open a node named '-'.
+    for (const char* line : {"A --o B", "A --x B", "B ---->|No| E[End]", "A--->B", "A->B"}) {
+        auto parsed = mermaid::parse(std::string("flowchart LR\n") + line + "\n");
+        check(!parsed.success && parsed.error == "Unsupported edge syntax",
+              (std::string("'") + line + "' shows its source as an unsupported edge").c_str());
+    }
+
+    check(mermaid::leftNotch(mermaid::NodeShape::Asymmetric, 52.0f) == 26.0f &&
+              mermaid::leftNotch(mermaid::NodeShape::Rectangle, 52.0f) == 0.0f &&
+              mermaid::leftNotch(mermaid::NodeShape::Hexagon, 52.0f) == 0.0f,
+          "only the asymmetric shape is notched, half its height in");
+}
+
+// The asymmetric shape fixture: every fence parses, with its asymmetric nodes
+void testAsymmetricFixture() {
+    std::ifstream file(TINTA_MERMAID_ASYMMETRIC_FIXTURE, std::ios::binary);
+    check(static_cast<bool>(file), "asymmetric shape fixture opens");
+    const std::string markdown((std::istreambuf_iterator<char>(file)),
+                               std::istreambuf_iterator<char>());
+    const auto fences = mermaidFences(markdown);
+    const std::vector<std::string> expected = {"Route Screen", "S A C D", "Parse Out", "Flag Back"};
+    check(fences.size() == expected.size(), "the fixture has four Mermaid fences");
+    for (size_t i = 0; i < fences.size() && i < expected.size(); ++i) {
+        auto parsed = mermaid::parse(fences[i]);
+        if (!parsed.success) {
+            std::cerr << "  fence " << i + 1 << ':' << parsed.errorLine << ": " << parsed.error << '\n';
+        }
+        check(parsed.success && asymmetricIds(parsed.diagram) == expected[i],
+              ("fixture fence " + std::to_string(i + 1) + " has asymmetric nodes " +
+               expected[i]).c_str());
+    }
+}
+
 void testExtFallbacks() {
     auto sequence = mermaidext::build(
         mermaidext::Kind::Sequence,
@@ -925,6 +1072,8 @@ int main(int argc, char** argv) {
     testC4LabelLayouts();
     testC4CrowdedLabels();
     testC4LabelFixture();
+    testAsymmetricShape();
+    testAsymmetricFixture();
     testFiles(argc, argv);
 
     if (failures != 0) {

@@ -45,6 +45,7 @@ constexpr Delimiter kDelimiters[] = {
     { "{{", "}}", NodeShape::Hexagon },
     { "[/", "/]", NodeShape::Rectangle },
     { "[\\", "\\]", NodeShape::Rectangle },
+    { ">", "]", NodeShape::Asymmetric },
     { "(", ")", NodeShape::RoundedRectangle },
     { "{", "}", NodeShape::Diamond },
     { "[", "]", NodeShape::Rectangle },
@@ -100,6 +101,27 @@ bool isArrowAt(std::string_view value, size_t position) {
         startsWithAt(value, position, "---") ||
         startsWithAt(value, position, "-.->") ||
         startsWithAt(value, position, "==>");
+}
+
+// The ']' closing the unquoted label of an asymmetric node (id>text])
+// whose '>' is at position, or npos. A '>' after anything but a node ID
+// opens no label, nor does one that meets an arrow or the line's end first;
+// a quoted label is kept whole by its quotes.
+size_t asymmetricLabelEnd(std::string_view text, size_t position) {
+    const auto before = static_cast<unsigned char>(position > 0 ? text[position - 1] : ' ');
+    if (!std::isalnum(before) && before != '_' && before < 0x80) {
+        return std::string_view::npos;
+    }
+    size_t i = position + 1;
+    while (i < text.size() && (text[i] == ' ' || text[i] == '\t')) i++;
+    if (i < text.size() && (text[i] == '"' || text[i] == '\'')) {
+        return std::string_view::npos;
+    }
+    for (; i < text.size() && text[i] != '\n'; i++) {
+        if (text[i] == ']') return i;
+        if (isArrowAt(text, i)) break;
+    }
+    return std::string_view::npos;
 }
 
 // A line break inside a double-quoted string, kept in the statement as one
@@ -354,12 +376,20 @@ bool parseNodeSpec(std::string_view line, size_t& position, size_t sourceOffset,
 
     while (position < line.size()) {
         char c = line[position];
-        if (isSpace(c) || c == '[' || c == '(' || c == '{' ||
+        if (isSpace(c) || c == '[' || c == '(' || c == '{' || c == '>' ||
             c == ':' || c == ';' || c == ',') {
             break;
         }
         if (isArrowAt(line, position)) break;
         position++;
+    }
+
+    // A '>' straight after '-' or '=' heads an arrow the parser does not
+    // read (--->, -..->, ->), not an asymmetric node
+    if (position > 0 && position < line.size() && line[position] == '>' &&
+        (line[position - 1] == '-' || line[position - 1] == '=')) {
+        error = "Unsupported edge syntax";
+        return false;
     }
 
     if (position == idStart) {
@@ -659,6 +689,15 @@ ParseResult parse(std::string_view source) {
             squareDepth == 0 && roundDepth == 0 && curlyDepth == 0) {
             comment = true;
             continue;
+        }
+        // An asymmetric node's unquoted label keeps its ';' and '|', as a
+        // bracketed one does
+        if (c == '>' && squareDepth == 0 && roundDepth == 0 && curlyDepth == 0) {
+            size_t close = asymmetricLabelEnd(normalized, i);
+            if (close != std::string_view::npos) {
+                i = close;
+                continue;
+            }
         }
         if (c == '|' && squareDepth == 0 && roundDepth == 0 && curlyDepth == 0) {
             pipeLabel = true;

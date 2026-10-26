@@ -24,6 +24,7 @@ enum class NodeShape {
     Stadium,
     Circle,
     Hexagon,
+    Asymmetric,  // id>text]: a rectangle notched in on its left side
 };
 
 struct Color {
@@ -104,6 +105,13 @@ struct Layout {
 ParseResult parse(std::string_view source);
 Layout layout(const Diagram& diagram, const std::vector<Size>& nodeSizes,
               float nodeGap, float rankGap);
+
+// How far a node's left side is notched in at mid-height. Mermaid draws the
+// asymmetric shape through (0,0) (w,0) (w,h) (0,h) and (h/2,h/2); its label
+// and edges keep to the rectangle beside the notch.
+inline float leftNotch(NodeShape shape, float height) {
+    return shape == NodeShape::Asymmetric ? height * 0.5f : 0.0f;
+}
 
 } // namespace mermaid
 

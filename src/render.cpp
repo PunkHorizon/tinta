@@ -1247,11 +1247,16 @@ static App::LayoutShapeType mermaidShapeType(mermaid::NodeShape shape) {
             return App::LayoutShapeType::Ellipse;
         case mermaid::NodeShape::Hexagon:
             return App::LayoutShapeType::Hexagon;
+        case mermaid::NodeShape::Asymmetric:  // a Path once its outline is built
         case mermaid::NodeShape::Rectangle:
         default:
             return App::LayoutShapeType::Rectangle;
     }
 }
+
+static ID2D1PathGeometry* buildPolygonGeometry(
+        App& app, const std::vector<mermaidext::Point>& points,
+        float originX, float originY);
 
 static bool layoutMermaidDiagram(App& app, const std::string& source,
                                  size_t sourceOffset, float& y,
@@ -1295,6 +1300,7 @@ static bool layoutMermaidDiagram(App& app, const std::string& source,
             width = diameter;
             height = diameter;
         }
+        width += mermaid::leftNotch(node.shape, height);
 
         labels.push_back(std::move(label));
         nodeSizes.push_back({width, height});
@@ -1454,6 +1460,12 @@ static bool layoutMermaidDiagram(App& app, const std::string& source,
 
     app.layoutConnectors.reserve(
         app.layoutConnectors.size() + diagram.edges.size());
+    // A node's left side at mid-height, where a notch has its tip
+    auto leftSide = [&](size_t node) {
+        const auto& rect = nodeRects[node];
+        return rect.left + mermaid::leftNotch(diagram.nodes[node].shape,
+                                              rect.bottom - rect.top);
+    };
     size_t exteriorLane = 0;
     std::vector<D2D1_RECT_F> placedLabelRects;
     placedLabelRects.reserve(diagram.edges.size());
@@ -1551,9 +1563,9 @@ static bool layoutMermaidDiagram(App& app, const std::string& source,
                 };
             } else if (forward) {
                 D2D1_POINT_2F start = D2D1::Point2F(
-                    leftToRight ? from.right : from.left, fromCenterY);
+                    leftToRight ? from.right : leftSide(edge.from), fromCenterY);
                 D2D1_POINT_2F end = D2D1::Point2F(
-                    leftToRight ? to.left : to.right, toCenterY);
+                    leftToRight ? leftSide(edge.to) : to.right, toCenterY);
                 float middleX = (start.x + end.x) * 0.5f;
                 connector.points = {
                     start,
@@ -1667,15 +1679,27 @@ static bool layoutMermaidDiagram(App& app, const std::string& source,
         const auto& node = diagram.nodes[i];
         const auto& rect = nodeRects[i];
         const auto& style = styles[i];
+        const float notch = mermaid::leftNotch(node.shape, rect.bottom - rect.top);
 
-        app.layoutShapes.push_back({
+        App::LayoutShape shape = {
             mermaidShapeType(node.shape),
             rect,
             style.fill,
             style.stroke,
             style.strokeWidth,
             8.0f * scale,
-        });
+        };
+        if (notch > 0.0f) {
+            // Built once in the shape's own space, so the screen and print
+            // draw the same outline
+            float w = rect.right - rect.left;
+            float h = rect.bottom - rect.top;
+            shape.geometry = buildPolygonGeometry(
+                app, {{0.0f, 0.0f}, {w, 0.0f}, {w, h}, {0.0f, h}, {notch, h * 0.5f}},
+                0.0f, 0.0f);
+            if (shape.geometry) shape.type = App::LayoutShapeType::Path;
+        }
+        app.layoutShapes.push_back(shape);
 
         float insetX = paddingX;
         float insetY = paddingY;
@@ -1687,7 +1711,7 @@ static bool layoutMermaidDiagram(App& app, const std::string& source,
         }
 
         D2D1_RECT_F textRect = D2D1::RectF(
-            rect.left + insetX,
+            rect.left + notch + insetX,
             rect.top + insetY,
             rect.right - insetX,
             rect.bottom - insetY);
@@ -1711,15 +1735,17 @@ static bool layoutMermaidDiagram(App& app, const std::string& source,
             return left.rect.left < right.rect.left;
         });
     for (const auto& item : textItems) {
+        // A pixel of slack, centred: a label boxed at its measured width and
+        // laid out again at exactly that width could wrap its last word
         LayoutInfo textLayout = createWrappedLayout(
             app, item.text, app.textFormat,
-            item.rect.right - item.rect.left,
+            item.rect.right - item.rect.left + 1.0f,
             item.rect.bottom - item.rect.top);
         size_t docStart = app.docText.size();
         app.docText += item.text;
         addTextRun(
             app, std::move(textLayout),
-            D2D1::Point2F(item.rect.left, item.rect.top),
+            D2D1::Point2F(item.rect.left - 0.5f, item.rect.top),
             item.rect, item.color, docStart, item.text.size(), true);
         app.docText += L"\n";
     }
