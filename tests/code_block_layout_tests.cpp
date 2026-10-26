@@ -155,9 +155,9 @@ void testMermaidMultilineLabels(App& app) {
     check(found >= 25, "the diagrams' labels are laid out (" + std::to_string(found) + ")");
 }
 
-// State diagrams with notes, loops and back edges among other Markdown:
-// every fence draws, and with the app's own text no label, note or edge
-// lands on a state, a note or another label
+// State diagrams with notes, loops, back edges and composite states among
+// other Markdown: every fence draws, and with the app's own text no label,
+// note or edge lands on a state, a note or another label
 void testMermaidStateDiagrams(App& app) {
     std::ifstream file(TINTA_MERMAID_STATES_FIXTURE, std::ios::binary);
     check(file.good(), "Mermaid state diagram fixture is available");
@@ -180,7 +180,7 @@ void testMermaidStateDiagrams(App& app) {
         check(problems.empty(), "nothing overlaps in diagram " + std::to_string(diagrams) +
                                     " with the app's text");
     }
-    check(diagrams == 8, "the fixture's eight diagrams draw, not " + std::to_string(diagrams));
+    check(diagrams == 12, "the fixture's twelve diagrams draw, not " + std::to_string(diagrams));
     check(app.docText.find(L"Overlapping labels") != std::wstring::npos,
           "text after the diagrams lays out");
 }

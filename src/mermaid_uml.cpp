@@ -10,6 +10,7 @@
 #include <array>
 #include <cctype>
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <map>
 #include <string>
@@ -631,7 +632,8 @@ struct Router {
     }
 
     // How tall each gap must be for its tracks with the chips on them, and
-    // for the chip of a straight drop between its source and arrowhead
+    // for a chip between arrowheads at both faces of the gap, which is
+    // where it goes when the run across is short
     std::vector<float> gapNeeds(const std::vector<Forward>& edges) const {
         auto halves = trackHalves(edges);
         std::vector<float> needs(halves.size(), 0.0f);
@@ -643,10 +645,10 @@ struct Router {
                          std::max(margin, halves[gap].back());
         }
         for (const Forward& edge : edges) {
-            if (edge.track >= 0 || edge.half <= 0.0f) continue;
+            if (edge.half <= 0.0f) continue;
             float& need = needs[ranks[edge.from]];
-            need = std::max(need,
-                            2.0f * edge.half + (kMarkerDepth + 6.0f) * scale);
+            need = std::max(need, 2.0f * edge.half +
+                                      2.0f * (kMarkerDepth + 6.0f) * scale);
         }
         return needs;
     }
@@ -1638,6 +1640,9 @@ void fitPrims(Built& built, float margin) {
 
 namespace {
 
+constexpr float kCompositePad = 14.0f;  // a composite's border to its regions
+constexpr float kRegionGap = 28.0f;     // between concurrent regions
+
 enum class StateKind { Normal, Start, End, Choice, Fork };
 
 struct StateNote {
@@ -1645,6 +1650,48 @@ struct StateNote {
     bool rightOf = true;
     std::string text;
 };
+
+// The diagram, or one concurrent region of a composite state, laid out on
+// its own with its own direction and its own start and end
+struct StateRegion {
+    size_t owner = SIZE_MAX;  // the composite state, SIZE_MAX at the top
+    mermaid::Direction direction = mermaid::Direction::TopToBottom;
+    std::vector<size_t> states;
+    size_t start = SIZE_MAX;
+    size_t end = SIZE_MAX;
+};
+
+struct Transition {
+    size_t from = 0;
+    size_t to = 0;
+    std::string label;
+};
+
+// Primitives drawn from (0, 0), and their extent
+struct Drawing {
+    std::vector<Prim> prims;
+    Size size;
+};
+
+// Regions side by side, or stacked, with where the lines between them go
+struct Arranged {
+    Drawing drawing;
+    std::vector<float> dividers;
+    bool sideBySide = true;
+};
+
+struct Composite {
+    Arranged body;
+    float header = 0.0f;  // height of the band with the name
+    Size name;
+    Size about;           // its descriptions under the name
+    Size size;
+};
+
+bool isVertical(mermaid::Direction direction) {
+    return direction == mermaid::Direction::TopToBottom ||
+           direction == mermaid::Direction::BottomToTop;
+}
 
 }  // namespace
 
@@ -1658,31 +1705,68 @@ Built buildState(std::string_view source, const Measure& measure,
     }
 
     GraphNodes graph;
-    graph.diagram.direction = mermaid::Direction::TopToBottom;
     std::vector<StateKind> kinds;
     std::vector<std::vector<std::string>> descriptions;
-    std::vector<EdgeDecor> decors;
+    std::vector<size_t> home;                // the region a state is in
+    std::vector<std::vector<size_t>> inner;  // a composite state's regions
+    std::vector<StateRegion> regions(1);
+    std::vector<size_t> topRegions{0};       // the diagram split by --
+    std::vector<size_t> open{0};             // regions being read
+    std::vector<Transition> transitions;
     std::vector<StateNote> notes;
-    size_t startNode = SIZE_MAX;
-    size_t endNode = SIZE_MAX;
 
+    // Whether `region` lies inside composite `state`, however deep
+    auto insideOf = [&](size_t region, size_t state) {
+        for (size_t owner = regions[region].owner; owner != SIZE_MAX;
+             owner = regions[home[owner]].owner) {
+            if (owner == state) return true;
+        }
+        return false;
+    };
+    // As in Mermaid, a state named inside a composite belongs to it, the
+    // last such composite when there are several, and naming it at the
+    // top again does not take it out; otherwise it belongs to the top
+    // region where it is first named. A composite never goes inside itself.
     auto ensureState = [&](std::string_view id,
                            std::string_view label) -> size_t {
         size_t index = graph.ensure(id, label);
+        size_t region = open.back();
         while (kinds.size() < graph.diagram.nodes.size()) {
             kinds.push_back(StateKind::Normal);
             descriptions.emplace_back();
+            inner.emplace_back();
+            home.push_back(region);
+        }
+        if (regions[region].owner != SIZE_MAX && home[index] != region &&
+            !insideOf(region, index)) {
+            home[index] = region;
         }
         return index;
     };
+    // [*] is the start or end of the region it is written in
     auto ensureEndpoint = [&](bool isStart) -> size_t {
-        size_t& node = isStart ? startNode : endNode;
+        size_t region = open.back();
+        size_t node = isStart ? regions[region].start : regions[region].end;
         if (node == SIZE_MAX) {
-            node = ensureState(isStart ? "__start" : "__end", " ");
+            std::string id(1, '\x1f');
+            id += (isStart ? "start" : "end") + std::to_string(region);
+            node = ensureState(id, " ");
             kinds[node] = isStart ? StateKind::Start : StateKind::End;
             graph.diagram.nodes[node].label.clear();
+            (isStart ? regions[region].start : regions[region].end) = node;
         }
         return node;
+    };
+    // `state X {` reads into X's first region, or its last when X was
+    // opened before
+    auto openComposite = [&](size_t state) {
+        if (inner[state].empty()) {
+            StateRegion region;
+            region.owner = state;
+            regions.push_back(region);
+            inner[state].push_back(regions.size() - 1);
+        }
+        open.push_back(inner[state].back());
     };
 
     bool sawHeader = false;
@@ -1698,21 +1782,40 @@ Built buildState(std::string_view source, const Measure& measure,
         }
         std::string_view rest;
         if (startsWithWord(line, "direction", &rest)) {
+            mermaid::Direction& direction = regions[open.back()].direction;
             if (rest == "LR") {
-                graph.diagram.direction = mermaid::Direction::LeftToRight;
+                direction = mermaid::Direction::LeftToRight;
             } else if (rest == "RL") {
-                graph.diagram.direction = mermaid::Direction::RightToLeft;
+                direction = mermaid::Direction::RightToLeft;
             } else if (rest == "BT") {
-                graph.diagram.direction = mermaid::Direction::BottomToTop;
+                direction = mermaid::Direction::BottomToTop;
             } else {
-                graph.diagram.direction = mermaid::Direction::TopToBottom;
+                direction = mermaid::Direction::TopToBottom;
             }
             continue;
         }
-        if (line.find('{') != std::string_view::npos ||
-            line == "--" || line == "}") {
-            result.error = "Composite states are not supported";
-            return result;
+        if (line == "}") {
+            if (open.size() < 2) {
+                result.error = "Unexpected }";
+                return result;
+            }
+            open.pop_back();
+            continue;
+        }
+        if (line == "--") {
+            // A concurrent region of the composite being read, or of the
+            // diagram itself
+            StateRegion region;
+            region.owner = regions[open.back()].owner;
+            regions.push_back(region);
+            size_t index = regions.size() - 1;
+            if (region.owner == SIZE_MAX) {
+                topRegions.push_back(index);
+            } else {
+                inner[region.owner].push_back(index);
+            }
+            open.back() = index;
+            continue;
         }
         if (startsWithWord(line, "note", &rest)) {
             StateNote note;
@@ -1737,7 +1840,18 @@ Built buildState(std::string_view source, const Measure& measure,
             continue;
         }
         if (startsWithWord(line, "state", &rest)) {
-            // state "description" as id  |  state id <<choice|fork|join>>
+            // state "description" as id  |  state id <<choice|fork|join>>,
+            // either opening a composite with {, or {} for an empty one
+            bool opens = false;
+            bool empty = false;
+            if (rest.size() >= 2 && rest.substr(rest.size() - 2) == "{}") {
+                empty = true;
+                rest = trimView(rest.substr(0, rest.size() - 2));
+            } else if (!rest.empty() && rest.back() == '{') {
+                opens = true;
+                rest = trimView(rest.substr(0, rest.size() - 1));
+            }
+            size_t node = SIZE_MAX;
             if (!rest.empty() && rest.front() == '"') {
                 size_t closeQuote = rest.find('"', 1);
                 if (closeQuote == std::string_view::npos) {
@@ -1748,9 +1862,9 @@ Built buildState(std::string_view source, const Measure& measure,
                 std::string_view after = trimView(rest.substr(closeQuote + 1));
                 std::string_view id;
                 if (startsWithWord(after, "as", &id)) {
-                    ensureState(trimView(id), description);
+                    node = ensureState(trimView(id), description);
                 } else {
-                    ensureState(description, description);
+                    node = ensureState(description, description);
                 }
             } else {
                 size_t marker = rest.find("<<");
@@ -1761,17 +1875,23 @@ Built buildState(std::string_view source, const Measure& measure,
                     if (close != std::string_view::npos) {
                         kind = kind.substr(0, close);
                     }
-                    size_t node = ensureState(id, {});
+                    node = ensureState(id, {});
                     if (kind == "choice") {
                         kinds[node] = StateKind::Choice;
                     } else if (kind == "fork" || kind == "join") {
                         kinds[node] = StateKind::Fork;
                         graph.diagram.nodes[node].label.clear();
                     }
-                } else {
-                    ensureState(trimView(rest), {});
+                } else if (!rest.empty()) {
+                    node = ensureState(rest, {});
                 }
             }
+            if (node == SIZE_MAX) {
+                result.error = "State without a name";
+                return result;
+            }
+            if (opens || empty) openComposite(node);
+            if (empty) open.pop_back();
             continue;
         }
 
@@ -1793,18 +1913,13 @@ Built buildState(std::string_view source, const Measure& measure,
                 result.error = "Transition needs two states";
                 return result;
             }
-            size_t from = fromId == "[*]" ? ensureEndpoint(true)
-                                          : ensureState(fromId, {});
-            size_t to = toId == "[*]" ? ensureEndpoint(false)
-                                      : ensureState(toId, {});
-            mermaid::Edge edge;
-            edge.from = from;
-            edge.to = to;
-            edge.label = label;
-            graph.diagram.edges.push_back(std::move(edge));
-            EdgeDecor decor;
-            decor.atTo = Marker::FilledArrow;
-            decors.push_back(std::move(decor));
+            Transition transition;
+            transition.from = fromId == "[*]" ? ensureEndpoint(true)
+                                              : ensureState(fromId, {});
+            transition.to = toId == "[*]" ? ensureEndpoint(false)
+                                          : ensureState(toId, {});
+            transition.label = std::move(label);
+            transitions.push_back(std::move(transition));
             continue;
         }
 
@@ -1820,257 +1935,485 @@ Built buildState(std::string_view source, const Measure& measure,
         result.error = "Unsupported state statement";
         return result;
     }
-
+    if (open.size() > 1) {
+        result.error = "Unclosed composite state";
+        return result;
+    }
     if (graph.diagram.nodes.empty()) {
         result.error = "No states";
         return result;
     }
+    for (size_t state = 0; state < home.size(); state++) {
+        regions[home[state]].states.push_back(state);
+    }
 
-    // --- measure nodes ---
+    // A transition belongs to the innermost region holding both its ends;
+    // an end inside a composite state of that region is drawn to the
+    // composite. Concurrent regions have nothing in common to draw in.
+    auto parentOf = [&](size_t region) {
+        size_t owner = regions[region].owner;
+        return owner == SIZE_MAX ? SIZE_MAX : home[owner];
+    };
+    std::vector<std::vector<Transition>> regionEdges(regions.size());
+    for (const Transition& transition : transitions) {
+        std::vector<size_t> around;
+        for (size_t r = home[transition.from]; r != SIZE_MAX; r = parentOf(r)) {
+            around.push_back(r);
+        }
+        size_t shared = SIZE_MAX;
+        for (size_t r = home[transition.to]; r != SIZE_MAX && shared == SIZE_MAX;
+             r = parentOf(r)) {
+            if (std::find(around.begin(), around.end(), r) != around.end()) {
+                shared = r;
+            }
+        }
+        auto lift = [&](size_t state) {
+            while (home[state] != shared) state = regions[home[state]].owner;
+            return state;
+        };
+        size_t from = shared == SIZE_MAX ? SIZE_MAX : lift(transition.from);
+        size_t to = shared == SIZE_MAX ? SIZE_MAX : lift(transition.to);
+        if (shared == SIZE_MAX ||
+            (from == to && transition.from != from && transition.to != to)) {
+            result.error = "Transitions between concurrent regions are not "
+                           "supported";
+            return result;
+        }
+        regionEdges[shared].push_back({from, to, transition.label});
+    }
+
     TextStyle nameStyle;
     nameStyle.bold = true;
     TextStyle descStyle;
     descStyle.scale = 0.9f;
-    bool vertical =
-        graph.diagram.direction == mermaid::Direction::TopToBottom ||
-        graph.diagram.direction == mermaid::Direction::BottomToTop;
-
-    std::vector<mermaid::Size> sizes(graph.diagram.nodes.size());
-    std::vector<Size> nameSizes(graph.diagram.nodes.size());
-    for (size_t i = 0; i < graph.diagram.nodes.size(); i++) {
-        switch (kinds[i]) {
-            case StateKind::Start:
-            case StateKind::End:
-                sizes[i] = {16.0f * scale, 16.0f * scale};
-                break;
-            case StateKind::Choice:
-                sizes[i] = {36.0f * scale, 36.0f * scale};
-                break;
-            case StateKind::Fork:
-                sizes[i] = vertical
-                               ? mermaid::Size{72.0f * scale, 9.0f * scale}
-                               : mermaid::Size{9.0f * scale, 72.0f * scale};
-                break;
-            case StateKind::Normal: {
-                Size nameSize =
-                    measure(graph.diagram.nodes[i].label, nameStyle, 0.0f);
-                nameSizes[i] = nameSize;
-                float width = nameSize.w;
-                float height = nameSize.h;
-                if (!descriptions[i].empty()) {
-                    for (const auto& description : descriptions[i]) {
-                        Size size = measure(description, descStyle, 0.0f);
-                        width = std::max(width, size.w);
-                        height += size.h;
-                    }
-                    height += 6.0f * scale;  // separator breathing room
-                }
-                sizes[i] = {std::max(56.0f * scale, width + 24.0f * scale),
-                            height + 16.0f * scale};
-                break;
-            }
-        }
-    }
-
-    // Notes sit beside their states, in room the layout keeps for them
     TextStyle noteStyle;
     noteStyle.scale = 0.9f;
-    std::vector<Attachment> attachments;
-    for (const auto& note : notes) {
-        Size size = measure(note.text, noteStyle, 220.0f * scale);
-        attachments.push_back({note.node, note.rightOf,
-                               {size.w + 16.0f * scale,
-                                size.h + 10.0f * scale}});
-    }
-    std::vector<Size> chips =
-        measureChips(graph.diagram, decors, measure, scale);
-    Scene scene = layoutScene(graph.diagram, sizes, attachments, chips,
-                              kNodeGap * scale, kRankGap * scale, scale, true);
-    if (scene.boxes.size() != graph.diagram.nodes.size()) {
+    bool failed = false;
+    auto joinedDescriptions = [&](size_t state) {
+        std::string joined;
+        for (const auto& description : descriptions[state]) {
+            if (!joined.empty()) joined += '\n';
+            joined += description;
+        }
+        return joined;
+    };
+
+    // Inner diagrams first: a composite is sized from its regions, laid
+    // out as one node of the region around it, and its regions' drawings
+    // are moved into its box
+    std::function<Drawing(size_t)> drawRegion;
+    auto arrange = [&](const std::vector<size_t>& parts) {
+        Arranged arranged;
+        arranged.sideBySide = isVertical(regions[parts.front()].direction);
+        std::vector<Drawing> drawings;
+        float across = 0.0f;
+        for (size_t part : parts) {
+            drawings.push_back(drawRegion(part));
+            const Size& size = drawings.back().size;
+            across = std::max(across, arranged.sideBySide ? size.h : size.w);
+        }
+        float gap = kRegionGap * scale;
+        float along = 0.0f;
+        for (size_t i = 0; i < drawings.size(); i++) {
+            Drawing& drawing = drawings[i];
+            if (i > 0) {
+                arranged.dividers.push_back(along + gap * 0.5f);
+                along += gap;
+            }
+            if (arranged.sideBySide) {
+                shiftPrims(drawing.prims, along,
+                           (across - drawing.size.h) * 0.5f);
+                along += drawing.size.w;
+            } else {
+                shiftPrims(drawing.prims, (across - drawing.size.w) * 0.5f,
+                           along);
+                along += drawing.size.h;
+            }
+            auto& prims = arranged.drawing.prims;
+            prims.insert(prims.end(), std::make_move_iterator(drawing.prims.begin()),
+                         std::make_move_iterator(drawing.prims.end()));
+        }
+        arranged.drawing.size = arranged.sideBySide ? Size{along, across}
+                                                    : Size{across, along};
+        return arranged;
+    };
+    auto drawComposite = [&](size_t state) {
+        Composite composite;
+        composite.body = arrange(inner[state]);
+        composite.name = measure(graph.diagram.nodes[state].label, nameStyle, 0.0f);
+        float width = composite.name.w;
+        composite.header = composite.name.h + 10.0f * scale;
+        if (!descriptions[state].empty()) {
+            composite.about = measure(joinedDescriptions(state), descStyle, 0.0f);
+            width = std::max(width, composite.about.w);
+            composite.header += composite.about.h + 2.0f * scale;
+        }
+        float pad = kCompositePad * scale;
+        const Size& body = composite.body.drawing.size;
+        composite.size = {
+            std::max({56.0f * scale, width + 24.0f * scale, body.w + 2.0f * pad}),
+            composite.header + body.h + 2.0f * pad};
+        return composite;
+    };
+    // The divider lines of an arrangement placed at (left, top), across
+    // [from, to] of the other axis
+    auto drawDividers = [&](std::vector<Prim>& prims, const Arranged& arranged,
+                            float left, float top, float from, float to) {
+        for (float at : arranged.dividers) {
+            Prim divider;
+            divider.type = PrimType::Line;
+            if (arranged.sideBySide) {
+                divider.x1 = divider.x2 = left + at;
+                divider.y1 = from;
+                divider.y2 = to;
+            } else {
+                divider.y1 = divider.y2 = top + at;
+                divider.x1 = from;
+                divider.x2 = to;
+            }
+            divider.stroke = Role::Muted;
+            divider.strokeWidth = 1.0f * scale;
+            divider.dashed = true;
+            prims.push_back(divider);
+        }
+    };
+    auto drawContainer = [&](std::vector<Prim>& prims, const mermaid::Rect& rect,
+                             size_t state, Composite& composite) {
+        Prim box;
+        box.type = PrimType::RoundRect;
+        box.radius = 9.0f * scale;
+        box.x1 = rect.left;
+        box.y1 = rect.top;
+        box.x2 = rect.right;
+        box.y2 = rect.bottom;
+        box.stroke = Role::Stroke;
+        box.strokeWidth = 1.5f * scale;
+        prims.push_back(box);
+        float headerBottom = rect.top + composite.header;
+        Prim name;
+        name.type = PrimType::Text;
+        name.text = graph.diagram.nodes[state].label;
+        name.style = nameStyle;
+        name.fill = Role::Text;
+        name.x1 = rect.left;
+        name.y1 = rect.top + 5.0f * scale;
+        name.x2 = rect.right;
+        name.y2 = name.y1 + composite.name.h;
+        prims.push_back(std::move(name));
+        if (!descriptions[state].empty()) {
+            Prim about;
+            about.type = PrimType::Text;
+            about.text = joinedDescriptions(state);
+            about.style = descStyle;
+            about.fill = Role::Text;
+            about.x1 = rect.left;
+            about.y1 = rect.top + 5.0f * scale + composite.name.h + 2.0f * scale;
+            about.x2 = rect.right;
+            about.y2 = about.y1 + composite.about.h;
+            prims.push_back(std::move(about));
+        }
+        Prim separator;
+        separator.type = PrimType::Line;
+        separator.x1 = rect.left;
+        separator.y1 = headerBottom;
+        separator.x2 = rect.right;
+        separator.y2 = headerBottom;
+        separator.stroke = Role::Stroke;
+        separator.strokeWidth = 1.0f * scale;
+        prims.push_back(separator);
+        Drawing& body = composite.body.drawing;
+        float left = (rect.left + rect.right - body.size.w) * 0.5f;
+        float top = headerBottom + kCompositePad * scale;
+        drawDividers(prims, composite.body, left, top,
+                     composite.body.sideBySide ? headerBottom : rect.left,
+                     composite.body.sideBySide ? rect.bottom : rect.right);
+        shiftPrims(body.prims, left, top);
+        prims.insert(prims.end(), std::make_move_iterator(body.prims.begin()),
+                     std::make_move_iterator(body.prims.end()));
+    };
+
+    drawRegion = [&](size_t r) {
+        Drawing out;
+        const StateRegion& region = regions[r];
+        if (region.states.empty() || failed) return out;
+        mermaid::Diagram diagram;
+        diagram.direction = region.direction;
+        std::vector<size_t> local(graph.diagram.nodes.size(), SIZE_MAX);
+        for (size_t state : region.states) {
+            local[state] = diagram.nodes.size();
+            diagram.nodes.push_back(graph.diagram.nodes[state]);
+        }
+        std::vector<EdgeDecor> decors;
+        for (const Transition& transition : regionEdges[r]) {
+            mermaid::Edge edge;
+            edge.from = local[transition.from];
+            edge.to = local[transition.to];
+            edge.label = transition.label;
+            diagram.edges.push_back(std::move(edge));
+            EdgeDecor decor;
+            decor.atTo = Marker::FilledArrow;
+            decors.push_back(std::move(decor));
+        }
+
+        // --- measure nodes ---
+        bool vertical = isVertical(region.direction);
+        size_t count = region.states.size();
+        std::vector<mermaid::Size> sizes(count);
+        std::vector<Size> nameSizes(count);
+        std::vector<Composite> composites(count);
+        for (size_t k = 0; k < count; k++) {
+            size_t state = region.states[k];
+            if (!inner[state].empty()) {
+                composites[k] = drawComposite(state);
+                sizes[k] = {composites[k].size.w, composites[k].size.h};
+                continue;
+            }
+            switch (kinds[state]) {
+                case StateKind::Start:
+                case StateKind::End:
+                    sizes[k] = {16.0f * scale, 16.0f * scale};
+                    break;
+                case StateKind::Choice:
+                    sizes[k] = {36.0f * scale, 36.0f * scale};
+                    break;
+                case StateKind::Fork:
+                    sizes[k] = vertical
+                                   ? mermaid::Size{72.0f * scale, 9.0f * scale}
+                                   : mermaid::Size{9.0f * scale, 72.0f * scale};
+                    break;
+                case StateKind::Normal: {
+                    Size nameSize =
+                        measure(graph.diagram.nodes[state].label, nameStyle, 0.0f);
+                    nameSizes[k] = nameSize;
+                    float width = nameSize.w;
+                    float height = nameSize.h;
+                    if (!descriptions[state].empty()) {
+                        for (const auto& description : descriptions[state]) {
+                            Size size = measure(description, descStyle, 0.0f);
+                            width = std::max(width, size.w);
+                            height += size.h;
+                        }
+                        height += 6.0f * scale;  // separator breathing room
+                    }
+                    sizes[k] = {std::max(56.0f * scale, width + 24.0f * scale),
+                                height + 16.0f * scale};
+                    break;
+                }
+            }
+        }
+
+        // Notes sit beside their states, in room the layout keeps for them
+        std::vector<const StateNote*> regionNotes;
+        std::vector<Attachment> attachments;
+        for (const auto& note : notes) {
+            if (home[note.node] != r) continue;
+            Size size = measure(note.text, noteStyle, 220.0f * scale);
+            regionNotes.push_back(&note);
+            attachments.push_back({local[note.node], note.rightOf,
+                                   {size.w + 16.0f * scale,
+                                    size.h + 10.0f * scale}});
+        }
+        std::vector<Size> chips = measureChips(diagram, decors, measure, scale);
+        Scene scene = layoutScene(diagram, sizes, attachments, chips,
+                                  kNodeGap * scale, kRankGap * scale, scale, true);
+        if (scene.boxes.size() != count) {
+            failed = true;
+            return out;
+        }
+        emitEdges(out.prims, diagram, scene, decors, chips, measure, scale);
+
+        // --- nodes ---
+        for (size_t k = 0; k < count; k++) {
+            size_t state = region.states[k];
+            const auto& rect = scene.boxes[k];
+            if (!inner[state].empty()) {
+                drawContainer(out.prims, rect, state, composites[k]);
+                continue;
+            }
+            switch (kinds[state]) {
+                case StateKind::Start: {
+                    Prim dot;
+                    dot.type = PrimType::Ellipse;
+                    dot.x1 = rect.left;
+                    dot.y1 = rect.top;
+                    dot.x2 = rect.right;
+                    dot.y2 = rect.bottom;
+                    dot.fill = Role::Accent;
+                    out.prims.push_back(dot);
+                    break;
+                }
+                case StateKind::End: {
+                    Prim ring;
+                    ring.type = PrimType::Ellipse;
+                    ring.x1 = rect.left;
+                    ring.y1 = rect.top;
+                    ring.x2 = rect.right;
+                    ring.y2 = rect.bottom;
+                    ring.stroke = Role::Accent;
+                    ring.strokeWidth = 1.6f * scale;
+                    out.prims.push_back(ring);
+                    Prim dot;
+                    dot.type = PrimType::Ellipse;
+                    float inset = 4.0f * scale;
+                    dot.x1 = rect.left + inset;
+                    dot.y1 = rect.top + inset;
+                    dot.x2 = rect.right - inset;
+                    dot.y2 = rect.bottom - inset;
+                    dot.fill = Role::Accent;
+                    out.prims.push_back(dot);
+                    break;
+                }
+                case StateKind::Choice: {
+                    Prim diamond;
+                    diamond.type = PrimType::Polygon;
+                    float cx = (rect.left + rect.right) * 0.5f;
+                    float cy = (rect.top + rect.bottom) * 0.5f;
+                    diamond.pts = {{cx, rect.top},
+                                   {rect.right, cy},
+                                   {cx, rect.bottom},
+                                   {rect.left, cy}};
+                    diamond.fill = Role::Fill;
+                    diamond.stroke = Role::Stroke;
+                    diamond.strokeWidth = 1.5f * scale;
+                    out.prims.push_back(std::move(diamond));
+                    break;
+                }
+                case StateKind::Fork: {
+                    Prim bar;
+                    bar.type = PrimType::RoundRect;
+                    bar.radius = 3.0f * scale;
+                    bar.x1 = rect.left;
+                    bar.y1 = rect.top;
+                    bar.x2 = rect.right;
+                    bar.y2 = rect.bottom;
+                    bar.fill = Role::Accent;
+                    out.prims.push_back(bar);
+                    break;
+                }
+                case StateKind::Normal: {
+                    Prim box;
+                    box.type = PrimType::RoundRect;
+                    box.radius = 7.0f * scale;
+                    box.x1 = rect.left;
+                    box.y1 = rect.top;
+                    box.x2 = rect.right;
+                    box.y2 = rect.bottom;
+                    box.fill = Role::Fill;
+                    box.stroke = Role::Stroke;
+                    box.strokeWidth = 1.5f * scale;
+                    out.prims.push_back(box);
+                    if (descriptions[state].empty()) {
+                        Prim name;
+                        name.type = PrimType::Text;
+                        name.text = graph.diagram.nodes[state].label;
+                        name.style = nameStyle;
+                        name.fill = Role::Text;
+                        name.x1 = rect.left;
+                        name.y1 = rect.top;
+                        name.x2 = rect.right;
+                        name.y2 = rect.bottom;
+                        out.prims.push_back(std::move(name));
+                    } else {
+                        float nameHeight = nameSizes[k].h + 8.0f * scale;
+                        Prim name;
+                        name.type = PrimType::Text;
+                        name.text = graph.diagram.nodes[state].label;
+                        name.style = nameStyle;
+                        name.fill = Role::Text;
+                        name.x1 = rect.left;
+                        name.y1 = rect.top;
+                        name.x2 = rect.right;
+                        name.y2 = rect.top + nameHeight;
+                        out.prims.push_back(std::move(name));
+                        Prim separator;
+                        separator.type = PrimType::Line;
+                        separator.x1 = rect.left;
+                        separator.y1 = rect.top + nameHeight;
+                        separator.x2 = rect.right;
+                        separator.y2 = rect.top + nameHeight;
+                        separator.stroke = Role::Stroke;
+                        separator.strokeWidth = 1.0f * scale;
+                        out.prims.push_back(separator);
+                        Prim body;
+                        body.type = PrimType::Text;
+                        body.text = joinedDescriptions(state);
+                        body.style = descStyle;
+                        body.fill = Role::Text;
+                        body.alignH = -1;
+                        body.x1 = rect.left + 10.0f * scale;
+                        body.y1 = rect.top + nameHeight + 3.0f * scale;
+                        body.x2 = rect.right - 10.0f * scale;
+                        body.y2 = rect.bottom - 3.0f * scale;
+                        out.prims.push_back(std::move(body));
+                    }
+                    break;
+                }
+            }
+        }
+
+        // Notes in the room kept beside their nodes, on a dashed link
+        for (size_t n = 0; n < regionNotes.size(); n++) {
+            const auto& rect = scene.boxes[local[regionNotes[n]->node]];
+            const auto& note = scene.attachments[n];
+            Prim box;
+            box.type = PrimType::Rect;
+            box.x1 = note.left;
+            box.y1 = note.top;
+            box.x2 = note.right;
+            box.y2 = note.bottom;
+            box.fill = Role::AccentSoft;
+            box.stroke = Role::Stroke;
+            box.strokeWidth = 1.0f * scale;
+            out.prims.push_back(box);
+            Prim text;
+            text.type = PrimType::Text;
+            text.text = regionNotes[n]->text;
+            text.style = noteStyle;
+            text.fill = Role::Text;
+            text.x1 = note.left + 8.0f * scale;
+            text.y1 = note.top + 5.0f * scale;
+            text.x2 = note.right - 8.0f * scale;
+            text.y2 = note.bottom - 5.0f * scale;
+            out.prims.push_back(std::move(text));
+            Prim link;
+            link.type = PrimType::Line;
+            float nodeX = (rect.left + rect.right) * 0.5f;
+            float nodeY = (rect.top + rect.bottom) * 0.5f;
+            float noteX = (note.left + note.right) * 0.5f;
+            float noteY = (note.top + note.bottom) * 0.5f;
+            if (note.left >= rect.right || note.right <= rect.left) {
+                bool right = note.left >= rect.right;
+                link.x1 = right ? rect.right : rect.left;
+                link.y1 = nodeY;
+                link.x2 = right ? note.left : note.right;
+                link.y2 = noteY;
+            } else {
+                bool below = note.top >= rect.bottom;
+                link.x1 = nodeX;
+                link.y1 = below ? rect.bottom : rect.top;
+                link.x2 = noteX;
+                link.y2 = below ? note.top : note.bottom;
+            }
+            link.stroke = Role::Muted;
+            link.strokeWidth = 1.0f * scale;
+            link.dashed = true;
+            out.prims.push_back(link);
+        }
+
+        mermaid::Rect bounds = primBounds(out.prims);
+        shiftPrims(out.prims, -bounds.left, -bounds.top);
+        out.size = {bounds.right - bounds.left, bounds.bottom - bounds.top};
+        return out;
+    };
+
+    Arranged top = arrange(topRegions);
+    if (failed) {
         result.error = "Layout failed";
         return result;
     }
-    emitEdges(result.prims, graph.diagram, scene, decors, chips, measure,
-              scale);
-
-    // --- nodes ---
-    for (size_t i = 0; i < graph.diagram.nodes.size(); i++) {
-        const auto& rect = scene.boxes[i];
-        switch (kinds[i]) {
-            case StateKind::Start: {
-                Prim dot;
-                dot.type = PrimType::Ellipse;
-                dot.x1 = rect.left;
-                dot.y1 = rect.top;
-                dot.x2 = rect.right;
-                dot.y2 = rect.bottom;
-                dot.fill = Role::Accent;
-                result.prims.push_back(dot);
-                break;
-            }
-            case StateKind::End: {
-                Prim ring;
-                ring.type = PrimType::Ellipse;
-                ring.x1 = rect.left;
-                ring.y1 = rect.top;
-                ring.x2 = rect.right;
-                ring.y2 = rect.bottom;
-                ring.stroke = Role::Accent;
-                ring.strokeWidth = 1.6f * scale;
-                result.prims.push_back(ring);
-                Prim dot;
-                dot.type = PrimType::Ellipse;
-                float inset = 4.0f * scale;
-                dot.x1 = rect.left + inset;
-                dot.y1 = rect.top + inset;
-                dot.x2 = rect.right - inset;
-                dot.y2 = rect.bottom - inset;
-                dot.fill = Role::Accent;
-                result.prims.push_back(dot);
-                break;
-            }
-            case StateKind::Choice: {
-                Prim diamond;
-                diamond.type = PrimType::Polygon;
-                float cx = (rect.left + rect.right) * 0.5f;
-                float cy = (rect.top + rect.bottom) * 0.5f;
-                diamond.pts = {{cx, rect.top},
-                               {rect.right, cy},
-                               {cx, rect.bottom},
-                               {rect.left, cy}};
-                diamond.fill = Role::Fill;
-                diamond.stroke = Role::Stroke;
-                diamond.strokeWidth = 1.5f * scale;
-                result.prims.push_back(std::move(diamond));
-                break;
-            }
-            case StateKind::Fork: {
-                Prim bar;
-                bar.type = PrimType::RoundRect;
-                bar.radius = 3.0f * scale;
-                bar.x1 = rect.left;
-                bar.y1 = rect.top;
-                bar.x2 = rect.right;
-                bar.y2 = rect.bottom;
-                bar.fill = Role::Accent;
-                result.prims.push_back(bar);
-                break;
-            }
-            case StateKind::Normal: {
-                Prim box;
-                box.type = PrimType::RoundRect;
-                box.radius = 7.0f * scale;
-                box.x1 = rect.left;
-                box.y1 = rect.top;
-                box.x2 = rect.right;
-                box.y2 = rect.bottom;
-                box.fill = Role::Fill;
-                box.stroke = Role::Stroke;
-                box.strokeWidth = 1.5f * scale;
-                result.prims.push_back(box);
-                if (descriptions[i].empty()) {
-                    Prim name;
-                    name.type = PrimType::Text;
-                    name.text = graph.diagram.nodes[i].label;
-                    name.style = nameStyle;
-                    name.fill = Role::Text;
-                    name.x1 = rect.left;
-                    name.y1 = rect.top;
-                    name.x2 = rect.right;
-                    name.y2 = rect.bottom;
-                    result.prims.push_back(std::move(name));
-                } else {
-                    float nameHeight = nameSizes[i].h + 8.0f * scale;
-                    Prim name;
-                    name.type = PrimType::Text;
-                    name.text = graph.diagram.nodes[i].label;
-                    name.style = nameStyle;
-                    name.fill = Role::Text;
-                    name.x1 = rect.left;
-                    name.y1 = rect.top;
-                    name.x2 = rect.right;
-                    name.y2 = rect.top + nameHeight;
-                    result.prims.push_back(std::move(name));
-                    Prim separator;
-                    separator.type = PrimType::Line;
-                    separator.x1 = rect.left;
-                    separator.y1 = rect.top + nameHeight;
-                    separator.x2 = rect.right;
-                    separator.y2 = rect.top + nameHeight;
-                    separator.stroke = Role::Stroke;
-                    separator.strokeWidth = 1.0f * scale;
-                    result.prims.push_back(separator);
-                    std::string joined;
-                    for (const auto& description : descriptions[i]) {
-                        if (!joined.empty()) joined += '\n';
-                        joined += description;
-                    }
-                    Prim body;
-                    body.type = PrimType::Text;
-                    body.text = joined;
-                    body.style = descStyle;
-                    body.fill = Role::Text;
-                    body.alignH = -1;
-                    body.x1 = rect.left + 10.0f * scale;
-                    body.y1 = rect.top + nameHeight + 3.0f * scale;
-                    body.x2 = rect.right - 10.0f * scale;
-                    body.y2 = rect.bottom - 3.0f * scale;
-                    result.prims.push_back(std::move(body));
-                }
-                break;
-            }
-        }
-    }
-
-    // Notes in the room kept beside their nodes, on a dashed link
-    for (size_t n = 0; n < notes.size(); n++) {
-        const auto& rect = scene.boxes[notes[n].node];
-        const auto& note = scene.attachments[n];
-        Prim box;
-        box.type = PrimType::Rect;
-        box.x1 = note.left;
-        box.y1 = note.top;
-        box.x2 = note.right;
-        box.y2 = note.bottom;
-        box.fill = Role::AccentSoft;
-        box.stroke = Role::Stroke;
-        box.strokeWidth = 1.0f * scale;
-        result.prims.push_back(box);
-        Prim text;
-        text.type = PrimType::Text;
-        text.text = notes[n].text;
-        text.style = noteStyle;
-        text.fill = Role::Text;
-        text.x1 = note.left + 8.0f * scale;
-        text.y1 = note.top + 5.0f * scale;
-        text.x2 = note.right - 8.0f * scale;
-        text.y2 = note.bottom - 5.0f * scale;
-        result.prims.push_back(std::move(text));
-        Prim link;
-        link.type = PrimType::Line;
-        float nodeX = (rect.left + rect.right) * 0.5f;
-        float nodeY = (rect.top + rect.bottom) * 0.5f;
-        float noteX = (note.left + note.right) * 0.5f;
-        float noteY = (note.top + note.bottom) * 0.5f;
-        if (note.left >= rect.right || note.right <= rect.left) {
-            bool right = note.left >= rect.right;
-            link.x1 = right ? rect.right : rect.left;
-            link.y1 = nodeY;
-            link.x2 = right ? note.left : note.right;
-            link.y2 = noteY;
-        } else {
-            bool below = note.top >= rect.bottom;
-            link.x1 = nodeX;
-            link.y1 = below ? rect.bottom : rect.top;
-            link.x2 = noteX;
-            link.y2 = below ? note.top : note.bottom;
-        }
-        link.stroke = Role::Muted;
-        link.strokeWidth = 1.0f * scale;
-        link.dashed = true;
-        result.prims.push_back(link);
-    }
-
+    result.prims = std::move(top.drawing.prims);
+    drawDividers(result.prims, top, 0.0f, 0.0f, 0.0f,
+                 top.sideBySide ? top.drawing.size.h : top.drawing.size.w);
     fitPrims(result, 8.0f * scale);
     result.ok = true;
     return result;

@@ -75,9 +75,9 @@ diagram's extent.
   association; an ER diagram with five relationships and attributes.
 - `code_block_layout` (`testMermaidStateDiagrams`):
   `tests/fixtures/mermaid-state-diagrams.md` in the app's own layout, in
-  Paper and Midnight, at scale 1 and 1.5, at 1050 and 650 px: all eight
-  diagrams draw, and their primitives, measured with the app's DirectWrite
-  text, pass the same checks.
+  Paper and Midnight, at scale 1 and 1.5, at 1050 and 650 px: all twelve
+  diagrams draw (eight without composite states), and their primitives,
+  measured with the app's DirectWrite text, pass the same checks.
 
 Neutering: with the old routing restored, `mermaid_parser` fails 140 checks.
 In the reproduction, "Esc Esc" overlaps "Searching", the note overlaps
@@ -118,3 +118,92 @@ uneven scales keeps that covered.
   labels stack beside the outermost loop.
 - Ranks and the order within them come from the existing layout: the
   router does not reorder states to remove crossings.
+
+## Composite states
+
+### Report
+
+A state diagram with `state Id { ... }` showed its source: any line with a
+`{`, and any `--` or `}` line, failed with "Composite states are not
+supported".
+
+### Change
+
+- The parser reads a tree of regions: the diagram, and the regions of each
+  composite, split by `--`. `state Id {` and `state "Long name" as Id {`
+  open a composite (or open it again to add to it), `state Id {}` makes an
+  empty one, and `}` closes it. `[*]` inside the braces is that region's
+  own start or end. `direction` applies to the region it is written in; a
+  composite's regions run top to bottom unless they say otherwise, as in
+  Mermaid.
+- As in Mermaid, a state named inside a composite belongs to it, to the
+  last such composite when there are several, and naming it at the top
+  again does not take it out. A composite never goes inside itself.
+- A transition is laid out in the innermost region holding both its ends;
+  an end inside a composite of that region is drawn to the composite's box.
+  A transition from a state to its own composite loops on the box. One
+  between concurrent regions has no region holding both, and falls back to
+  the source.
+- Regions are laid out from the inside out: each is a diagram of its own,
+  with the notes, loops, lanes and labels above, and a composite is one
+  node of its parent, sized to its header and regions. Its box has its name
+  (and any description) in a band above a rule, and below it its regions,
+  side by side, or stacked when they run left to right, parted by dashed
+  lines. The diagram itself may be split by `--` the same way.
+- Gaps between ranks leave room for a label between arrowheads at both of
+  their faces. In a left-to-right composite example, the label of an edge
+  beside its parallel back edge found no room in the gap.
+
+### Automated checks
+
+- `mermaid_parser` (`testCompositeStates`): the example from the report in
+  all four directions at scale 1 and 1.75. Editing is a box around Typing
+  and Selecting with its own start, apart from the diagram's start and end;
+  the transitions to and from Editing end on its border; the inner label is
+  inside it. Then, in all four directions at both scales: three nested
+  composites, each inside the last with its own start and end; three
+  concurrent regions parted by two dashed lines, each with its own start
+  and no state across a line; a composite named with `as`, with its own
+  direction, notes inside it and on it, a loop on it, and transitions
+  between states outside and inside it ending on its border; a diagram
+  split at the top; a transition into a state two composites deep, named
+  before its composite; and an empty composite. The layout checks also
+  report a transition crossing a composite's border or running through its
+  header, and a chip, note or state that straddles a composite instead of
+  lying in its body or clear of it.
+- `mermaid_parser` (`testExtFallbacks`): a composite now draws; an
+  unclosed composite, a stray `}` and a transition between concurrent
+  regions fall back.
+- `code_block_layout` (`testMermaidStateDiagrams`): the fixture's four
+  composite diagrams pass the same checks with the app's text.
+
+Neutering: with composite lines rejected again, `mermaid_parser` fails 153
+checks. Every composite diagram falls back ("Composite states are not
+supported"), so no container, inner start, divider or nested box is found,
+and no transition ends on a composite's border.
+
+### Visual check
+
+- The fixture through `--printpages` (`out/state-p2-light/pages`, pages 5
+  and 6): Editing is a box with its name over its own start, Typing and
+  Selecting, and "press colon" and "Esc Esc" end on its top. "Text
+  editing" holds its own left-to-right diagram, with "Caret visible" below
+  Typing, "Edit mode" above the box, the "undo" loop below it, and "open
+  file", "close" and "Ctrl+S" on its sides. Active has three regions parted
+  by dashed lines; Review sits inside Document, each in its own direction.
+  The surrounding text, quote and table lay out as before.
+- `--exporthtml` in Paper and Midnight (`out/state-p2-light/export.html`,
+  `out/state-p2-dark/export.html`, rasterised): twelve inline SVGs; the
+  boxes are drawn in the theme's accent in both.
+- The app window at 650 px (`out/state-p2-narrow`): the composite example
+  draws as in print, between its heading and text.
+
+### Limitations
+
+- A transition between a state outside a composite and one inside it is
+  drawn to the composite's box, not into the box to the inner state.
+- A transition between concurrent regions falls back to the source.
+- A composite's regions run top to bottom unless they set a direction,
+  whatever the diagram's own direction, as Mermaid lays them out.
+- Notes over several lines (`note ... end note`) still fall back, as
+  before.

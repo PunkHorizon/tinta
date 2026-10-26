@@ -133,6 +133,100 @@ stateDiagram-v2
     note left of Connected : Keep-alive every 30 s
 ```
 
+## Composite states
+
+A composite state draws as a box with its name over its own diagram, which
+has its own start and end. Transitions to the composite end on its border:
+
+```mermaid
+stateDiagram-v2
+    [*] --> Reading
+    Reading --> Editing : press colon
+    Editing --> Reading : Esc Esc
+    state Editing {
+        [*] --> Typing
+        Typing --> Selecting : Shift+arrows
+        Selecting --> Typing
+    }
+    Reading --> [*] : Q
+```
+
+Left to right, with a long name, its own `direction`, notes inside and on
+it, a loop on it, and transitions between states **outside** and
+*inside* it, which end on its border:
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> Idle
+    state "Text editing" as Editing {
+        direction LR
+        [*] --> Typing
+        Typing --> Selecting : Shift+arrows
+        Selecting --> Typing : any key
+        Typing --> [*] : Esc
+        note right of Typing : Caret visible
+    }
+    Idle --> Typing : open file
+    Selecting --> Idle : close
+    Editing --> Saving : Ctrl+S
+    Saving --> Editing
+    Editing --> Editing : undo
+    note left of Editing : Edit mode
+    Saving --> [*]
+```
+
+> Regions separated by `--` run at the same time. Each is laid out on its
+> own, and dashed lines part them.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Active
+    state Active {
+        [*] --> NumLockOff
+        NumLockOff --> NumLockOn : EvNumLockPressed
+        NumLockOn --> NumLockOff : EvNumLockPressed
+        --
+        [*] --> CapsLockOff
+        CapsLockOff --> CapsLockOn : EvCapsLockPressed
+        CapsLockOn --> CapsLockOff : EvCapsLockPressed
+        --
+        [*] --> ScrollLockOff
+        ScrollLockOff --> ScrollLockOn : EvScrollLockPressed
+        ScrollLockOn --> ScrollLockOff : EvScrollLockPressed
+    }
+    Active --> [*] : power off
+```
+
+Composites nest, each with its own direction:
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> Document
+    state Document {
+        [*] --> Draft
+        Draft --> Review : submit
+        state Review {
+            direction LR
+            [*] --> Reading
+            Reading --> Commenting : select text
+            Commenting --> Reading : post
+        }
+        Review --> Draft : changes requested
+        Review --> [*] : approved
+    }
+    Document --> Published : publish
+    Published --> [*]
+```
+
+| Syntax | Draws |
+| --- | --- |
+| `state Id { ... }` | a box named Id around its own diagram |
+| `state "Long name" as Id { ... }` | the same, named Long name |
+| `[*]` inside the braces | the composite's own start or end |
+| `--` inside the braces | a dashed line between concurrent regions |
+
 ## Class and ER diagrams
 
 Class and entity-relationship diagrams share the edge routing:

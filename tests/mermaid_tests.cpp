@@ -762,7 +762,21 @@ void testExtFallbacks() {
         mermaidext::Kind::State,
         "stateDiagram-v2\n    state Outer {\n        [*] --> A\n    }\n",
         fakeMeasure, 1.0f);
-    check(!composite.ok, "composite states fall back");
+    check(composite.ok, "a composite state draws instead of falling back");
+    auto unclosed = mermaidext::build(
+        mermaidext::Kind::State,
+        "stateDiagram-v2\n    state Outer {\n        [*] --> A\n", fakeMeasure, 1.0f);
+    check(!unclosed.ok, "an unclosed composite state falls back");
+    auto stray = mermaidext::build(
+        mermaidext::Kind::State, "stateDiagram-v2\n    A --> B\n    }\n",
+        fakeMeasure, 1.0f);
+    check(!stray.ok, "a } with no composite open falls back");
+    auto across = mermaidext::build(
+        mermaidext::Kind::State,
+        "stateDiagram-v2\n    state P {\n        A --> B\n        --\n"
+        "        C --> D\n    }\n    A --> C\n",
+        fakeMeasure, 1.0f);
+    check(!across.ok, "a transition between concurrent regions falls back");
     auto pie = mermaidext::build(mermaidext::Kind::Pie,
                                  "pie\n    \"A\" : -3\n", fakeMeasure, 1.0f);
     check(!pie.ok, "negative pie values fall back");
@@ -1345,6 +1359,293 @@ void testStateMachines() {
     }
 }
 
+// The box drawn for a composite state, found by the name in its header
+Box containerNamed(const mermaidext::Built& built, const std::string& name, float scale) {
+    using mermaidext::PrimType;
+    using mermaidext::Role;
+    for (const auto& prim : built.prims) {
+        if (prim.type != PrimType::RoundRect || prim.fill != Role::None ||
+            prim.stroke != Role::Stroke) {
+            continue;
+        }
+        Box box{prim.x1, prim.y1, prim.x2, prim.y2};
+        for (const auto& text : built.prims) {
+            if (text.type == PrimType::Text && text.text == name &&
+                mermaidcheck::within({text.x1, text.y1, text.x2, text.y2}, box) &&
+                text.y1 < box.top + 10.0f * scale) {
+                return box;
+            }
+        }
+    }
+    return {};
+}
+
+bool drawn(const Box& box) { return box.right > box.left; }
+
+// Start dots and end rings inside `box`, and outside it
+struct Ends {
+    int startsIn = 0;
+    int startsOut = 0;
+    int endsIn = 0;
+    int endsOut = 0;
+};
+
+Ends endsAround(const mermaidext::Built& built, const Box& box) {
+    using mermaidext::PrimType;
+    using mermaidext::Role;
+    std::vector<Box> rings;
+    std::vector<Box> dots;
+    for (const auto& prim : built.prims) {
+        if (prim.type != PrimType::Ellipse) continue;
+        Box shape{prim.x1, prim.y1, prim.x2, prim.y2};
+        if (prim.stroke == Role::Accent) rings.push_back(shape);
+        else if (prim.fill == Role::Accent) dots.push_back(shape);
+    }
+    Ends ends;
+    for (const Box& ring : rings) {
+        (mermaidcheck::within(ring, box) ? ends.endsIn : ends.endsOut)++;
+    }
+    for (const Box& dot : dots) {
+        bool inRing = false;
+        for (const Box& ring : rings) inRing = inRing || mermaidcheck::within(dot, ring);
+        if (!inRing) (mermaidcheck::within(dot, box) ? ends.startsIn : ends.startsOut)++;
+    }
+    return ends;
+}
+
+// Transitions that reach the border of `box` from outside it: they start
+// on it, or stop an arrowhead short of it
+int endsOnBorder(const mermaidext::Built& built, const Box& box, float scale) {
+    float reach = 8.5f * scale;
+    int count = 0;
+    for (const auto& line : mermaidcheck::shapesOf(built, scale, true).lines) {
+        for (int side = 0; side < 2; side++) {
+            const mermaidext::Point& end = side ? line.b : line.a;
+            const mermaidext::Point& other = side ? line.a : line.b;
+            bool alongX = end.x > box.left - 0.5f && end.x < box.right + 0.5f;
+            bool alongY = end.y > box.top - 0.5f && end.y < box.bottom + 0.5f;
+            bool atBorder =
+                (alongX && ((end.y <= box.top + 0.5f && end.y >= box.top - reach) ||
+                            (end.y >= box.bottom - 0.5f && end.y <= box.bottom + reach))) ||
+                (alongY && ((end.x <= box.left + 0.5f && end.x >= box.left - reach) ||
+                            (end.x >= box.right - 0.5f && end.x <= box.right + reach)));
+            if (atBorder && mermaidcheck::outside(other, box)) count++;
+        }
+    }
+    return count;
+}
+
+// Dashed lines between concurrent regions inside `box`
+int dividersIn(const mermaidext::Built& built, const Box& box, float scale) {
+    int count = 0;
+    for (const auto& prim : built.prims) {
+        if (prim.type == mermaidext::PrimType::Line && prim.dashed &&
+            prim.stroke == mermaidext::Role::Muted && prim.strokeWidth < 1.2f * scale &&
+            mermaidcheck::within({std::min(prim.x1, prim.x2), std::min(prim.y1, prim.y2),
+                                  std::max(prim.x1, prim.x2), std::max(prim.y1, prim.y2)},
+                                 box)) {
+            count++;
+        }
+    }
+    return count;
+}
+
+const char* const kCompositeExample = R"(stateDiagram-v2
+    [*] --> Reading
+    Reading --> Editing : press colon
+    Editing --> Reading : Esc Esc
+    state Editing {
+        [*] --> Typing
+        Typing --> Selecting : Shift+arrows
+        Selecting --> Typing
+    }
+    Reading --> [*] : Q
+)";
+
+// Composite states draw as a box with their name over their own diagram,
+// with its own start and end; transitions to the composite end on its
+// border, and nothing crosses it
+void testCompositeStates() {
+    const char* const kDirections[] = {"", "LR", "BT", "RL"};
+    for (float scale : {1.0f, 1.75f}) {
+        for (const char* direction : kDirections) {
+            std::string source = *direction ? withDirection(kCompositeExample, direction)
+                                            : std::string(kCompositeExample);
+            auto built = mermaidext::build(mermaidext::Kind::State, source,
+                                           scaledMeasure(scale), scale);
+            std::string name = std::string("composite example ") +
+                               (*direction ? direction : "TB") + " at " +
+                               std::to_string(scale).substr(0, 4);
+            checkLayout(name, built, scale);
+            Box editing = containerNamed(built, "Editing", scale);
+            check(drawn(editing), "Editing draws as a box around its states");
+            check(mermaidcheck::within(textBox(built, "Typing"), editing) &&
+                      mermaidcheck::within(textBox(built, "Selecting"), editing),
+                  "Typing and Selecting are inside Editing");
+            check(!overlap(textBox(built, "Reading"), editing), "Reading is outside Editing");
+            Ends ends = endsAround(built, editing);
+            check(ends.startsIn == 1 && ends.startsOut == 1 && ends.endsOut == 1 &&
+                      ends.endsIn == 0,
+                  "Editing's own start is inside it, apart from the diagram's start and end");
+            check(endsOnBorder(built, editing, scale) >= 2,
+                  "the transitions to and from Editing end on its border");
+            check(hasText(built, "Shift+arrows") &&
+                      mermaidcheck::within(textBox(built, "Shift+arrows"), editing),
+                  "the inner label is inside Editing");
+        }
+    }
+
+    // Nesting three deep, as in Mermaid's documentation
+    const char* const kNested = R"(stateDiagram-v2
+    [*] --> First
+    state First {
+        [*] --> Second
+        state Second {
+            [*] --> second
+            second --> Third
+            state Third {
+                [*] --> third
+                third --> [*]
+            }
+        }
+    }
+    First --> [*]
+)";
+    // Concurrent regions, as in Mermaid's documentation
+    const char* const kConcurrent = R"(stateDiagram-v2
+    [*] --> Active
+    state Active {
+        [*] --> NumLockOff
+        NumLockOff --> NumLockOn : EvNumLockPressed
+        NumLockOn --> NumLockOff : EvNumLockPressed
+        --
+        [*] --> CapsLockOff
+        CapsLockOff --> CapsLockOn : EvCapsLockPressed
+        CapsLockOn --> CapsLockOff : EvCapsLockPressed
+        --
+        [*] --> ScrollLockOff
+        ScrollLockOff --> ScrollLockOn : EvScrollLockPressed
+        ScrollLockOn --> ScrollLockOff : EvScrollLockPressed
+    }
+    Active --> [*] : power off
+)";
+    // A long name, its own direction, notes inside and on it, a loop on
+    // it, and transitions between states outside and inside it
+    const char* const kAcross = R"(stateDiagram-v2
+    direction LR
+    [*] --> Idle
+    state "Text editing" as Editing {
+        direction LR
+        [*] --> Typing
+        Typing --> Selecting : Shift+arrows
+        Selecting --> Typing : any key
+        Typing --> [*] : Esc
+        note right of Typing : Caret visible
+    }
+    Idle --> Typing : open file
+    Selecting --> Idle : close
+    Editing --> Saving : Ctrl+S
+    Saving --> Editing
+    Editing --> Editing : undo
+    note left of Editing : Edit mode
+    Saving --> [*]
+)";
+    // The diagram itself split into regions
+    const char* const kTopRegions = R"(stateDiagram-v2
+    [*] --> Left
+    Left --> [*]
+    --
+    [*] --> Right
+    Right --> Right : tick
+)";
+    for (float scale : {1.0f, 1.75f}) {
+        for (const char* direction : kDirections) {
+            auto variant = [&](const char* source) {
+                return *direction ? withDirection(source, direction) : std::string(source);
+            };
+            std::string suffix = std::string(" ") + (*direction ? direction : "as written") +
+                                 " at " + std::to_string(scale).substr(0, 4);
+            auto measure = scaledMeasure(scale);
+
+            auto nested = mermaidext::build(mermaidext::Kind::State, variant(kNested),
+                                            measure, scale);
+            checkLayout("nested composites" + suffix, nested, scale);
+            Box first = containerNamed(nested, "First", scale);
+            Box second = containerNamed(nested, "Second", scale);
+            Box third = containerNamed(nested, "Third", scale);
+            check(drawn(first) && drawn(second) && drawn(third) &&
+                      mermaidcheck::within(second, first) &&
+                      mermaidcheck::within(third, second) &&
+                      mermaidcheck::within(textBox(nested, "third"), third),
+                  "nested composites sit inside each other");
+            Ends thirdEnds = endsAround(nested, third);
+            check(thirdEnds.startsIn == 1 && thirdEnds.endsIn == 1,
+                  "the innermost composite has its own start and end");
+
+            auto concurrent = mermaidext::build(mermaidext::Kind::State,
+                                                variant(kConcurrent), measure, scale);
+            checkLayout("concurrent regions" + suffix, concurrent, scale);
+            Box active = containerNamed(concurrent, "Active", scale);
+            check(drawn(active) && dividersIn(concurrent, active, scale) == 2,
+                  "three concurrent regions are parted by two dashed lines");
+            Ends activeEnds = endsAround(concurrent, active);
+            check(activeEnds.startsIn == 3, "each concurrent region has its own start");
+            // No state of one region lies across a divider
+            for (const auto& prim : concurrent.prims) {
+                if (prim.type != mermaidext::PrimType::Line || !prim.dashed ||
+                    prim.strokeWidth > 1.2f * scale) {
+                    continue;
+                }
+                mermaidcheck::Segment divider{{prim.x1, prim.y1}, {prim.x2, prim.y2}};
+                for (const char* state : {"NumLockOff", "CapsLockOn", "ScrollLockOff"}) {
+                    check(!mermaidcheck::pierces(divider, textBox(concurrent, state)),
+                          "a divider passes between the regions' states");
+                }
+            }
+
+            auto across = mermaidext::build(mermaidext::Kind::State, variant(kAcross),
+                                            measure, scale);
+            checkLayout("transitions across a composite" + suffix, across, scale);
+            Box editing = containerNamed(across, "Text editing", scale);
+            check(drawn(editing) && mermaidcheck::within(textBox(across, "Typing"), editing),
+                  "a composite named with as shows its long name");
+            check(!overlap(textBox(across, "Idle"), editing) &&
+                      endsOnBorder(across, editing, scale) >= 5,
+                  "transitions from outside to states inside end on the composite");
+            check(mermaidcheck::within(textBox(across, "Caret visible"), editing) &&
+                      !overlap(textBox(across, "Edit mode"), editing),
+                  "a note on an inner state is inside, a note on the composite outside");
+
+            auto top = mermaidext::build(mermaidext::Kind::State, variant(kTopRegions),
+                                         measure, scale);
+            checkLayout("concurrent diagram" + suffix, top, scale);
+            check(dividersIn(top, {0.0f, 0.0f, top.width, top.height}, scale) == 1,
+                  "a diagram split by -- draws a dashed line between its regions");
+
+            // A transition into a state two composites deep ends on the
+            // outer one, also when it names the state before the composite
+            // that holds it; an empty composite is a box with its name
+            const std::string nestedBody =
+                std::string(kNested).substr(std::string(kNested).find('\n') + 1);
+            const std::string deepSource =
+                "stateDiagram-v2\n    [*] --> Idle\n    Idle --> third : jump\n" + nestedBody +
+                "    state Empty {\n    }\n    Idle --> Empty\n";
+            auto deep = mermaidext::build(mermaidext::Kind::State, variant(deepSource.c_str()),
+                                          measure, scale);
+            checkLayout("transition two composites deep" + suffix, deep, scale);
+            Box outer = containerNamed(deep, "First", scale);
+            check(drawn(outer) && !overlap(textBox(deep, "Idle"), outer) &&
+                      endsOnBorder(deep, outer, scale) >= 1,
+                  "a transition into a nested state ends on the outermost composite");
+            check(mermaidcheck::within(textBox(deep, "third"),
+                                       containerNamed(deep, "Third", scale)),
+                  "a state named at the top first still belongs to its composite");
+            check(drawn(containerNamed(deep, "Empty", scale)),
+                  "an empty composite draws as a box with its name");
+        }
+    }
+}
+
 // Class and ER diagrams share the router: their edges and chips keep clear
 // too, with markers and multiplicities at both ends
 void testClassAndErLayouts() {
@@ -1405,6 +1706,7 @@ int main(int argc, char** argv) {
     testExtFallbacks();
     testStateOverlapRepro();
     testStateMachines();
+    testCompositeStates();
     testClassAndErLayouts();
     testFrontMatterFixture();
     testC4ReportedLabels();
