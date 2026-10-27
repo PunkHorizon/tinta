@@ -234,6 +234,48 @@ std::wstring selectionTextForRange(const App& app, size_t start, size_t end) {
     return app.docText.substr(start, end - start);
 }
 
+std::wstring selectionHtmlForRange(const App& app, size_t start, size_t end) {
+    start = std::min(start, app.docText.size());
+    end = std::min(end, app.docText.size());
+    std::wstring html;
+    auto range = app.docBoldRanges.begin();
+    bool inBold = false;
+    bool lineStart = true;
+    for (size_t i = start; i < end; i++) {
+        while (range != app.docBoldRanges.end() && range->second <= i) ++range;
+        bool bold = range != app.docBoldRanges.end() && range->first <= i;
+        wchar_t c = app.docText[i];
+        // Line breaks close the bold span so each line stays balanced
+        if (inBold && (!bold || c == L'\n')) { html += L"</b>"; inBold = false; }
+        if (bold && !inBold && c != L'\n' && c != L'\r') { html += L"<b>"; inBold = true; }
+        switch (c) {
+            case L'\r': break;
+            case L'\n': html += L"<br>\r\n"; lineStart = true; continue;
+            case L'&': html += L"&amp;"; break;
+            case L'<': html += L"&lt;"; break;
+            case L'>': html += L"&gt;"; break;
+            case L'"': html += L"&quot;"; break;
+            case L'\t': html += L"<span style='mso-tab-count:1'>&#9;</span>"; break;
+            case L' ': {
+                // HTML collapses runs of spaces; keep the copied ones
+                bool next = i + 1 < end && app.docText[i + 1] == L' ';
+                html += (lineStart || next) ? L"&nbsp;" : L" ";
+                break;
+            }
+            default: html += c; break;
+        }
+        lineStart = false;
+    }
+    if (inBold) html += L"</b>";
+    return html;
+}
+
+bool copySelectionRange(const App& app, HWND hwnd, size_t start, size_t end) {
+    std::wstring text = selectionTextForRange(app, start, end);
+    if (text.empty()) return false;
+    return copyRichTextToClipboard(hwnd, text, selectionHtmlForRange(app, start, end));
+}
+
 void clearSelection(App& app) {
     app.selecting = false;
     app.hasSelection = false;
