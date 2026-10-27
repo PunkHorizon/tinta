@@ -67,12 +67,21 @@ bool clipboardEquals(App& app, const std::wstring& expected) {
 }
 std::wstring oleClipboardText() {
     // Reads the clipboard the way OLE applications such as Word paste it.
-    Microsoft::WRL::ComPtr<IDataObject> clipboard; std::wstring text;
-    FORMATETC format{CF_UNICODETEXT,nullptr,DVASPECT_CONTENT,-1,TYMED_HGLOBAL}; STGMEDIUM medium{};
-    if (SUCCEEDED(OleGetClipboard(clipboard.GetAddressOf())) && SUCCEEDED(clipboard->GetData(&format,&medium))) {
-        if (auto chars = static_cast<const wchar_t*>(GlobalLock(medium.hGlobal))) { text = chars; GlobalUnlock(medium.hGlobal); }
-        ReleaseStgMedium(&medium);
+    // OLE fails at once with CLIPBRD_E_CANT_OPEN while another program has
+    // the clipboard open, as Remote Desktop's rdpclip and clipboard history
+    // do just after each change, so the read is retried for a second.
+    std::wstring text; HRESULT result = E_FAIL;
+    for (int attempt=0;attempt<50;++attempt) {
+        if (attempt) Sleep(20);
+        Microsoft::WRL::ComPtr<IDataObject> clipboard;
+        FORMATETC format{CF_UNICODETEXT,nullptr,DVASPECT_CONTENT,-1,TYMED_HGLOBAL}; STGMEDIUM medium{};
+        if (SUCCEEDED(result = OleGetClipboard(clipboard.GetAddressOf())) && SUCCEEDED(result = clipboard->GetData(&format,&medium))) {
+            if (auto chars = static_cast<const wchar_t*>(GlobalLock(medium.hGlobal))) { text = chars; GlobalUnlock(medium.hGlobal); }
+            ReleaseStgMedium(&medium);
+            return text;
+        }
     }
+    std::cerr << "OLE clipboard read failed: 0x" << std::hex << result << std::dec << '\n';
     return text;
 }
 void menuAction(App& app, int action) {

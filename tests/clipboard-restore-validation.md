@@ -94,3 +94,20 @@ rounds 1, 3 and 5, and was plain text (`clip.exe`) in rounds 2 and 4:
 - No app code or rendering changed, so no fixture rendering or export
   comparison was needed. The existing `fixtures/editor-context-selection.md`
   drives the editor tests.
+
+## Over Remote Desktop (2026-10-27)
+
+Merged onto master after 3.9.3 and run in a Remote Desktop session, where
+Remote Desktop's clipboard redirector (`rdpclip`) opens the clipboard to
+read each change, the check that OLE applications can paste the restored
+clipboard failed in 6 of 6 runs. Logging the read showed why: right after
+the restore, `OleGetClipboard` returned `CLIPBRD_E_CANT_OPEN` (0x800401D0),
+and the same read 20 ms later returned the restored text. The Win32 read
+before it retries `OpenClipboard`; OLE fails at once while another program
+has the clipboard open.
+
+`oleClipboardText` now retries for up to a second and prints the HRESULT if
+the read still fails, so a clipboard that OLE cannot read at all still fails
+the check. The menu Copy and Cut checks also failed in 3 of 15 runs there;
+that was the editor giving up on a held clipboard, fixed in the app (see
+`tests/editor-cut-busy-clipboard-validation.md`).
