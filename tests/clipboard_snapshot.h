@@ -95,3 +95,17 @@ struct OleClipboardSource {
         OleUninitialize();
     }
 };
+
+// Holds the clipboard open on its own thread, as Remote Desktop's clipboard
+// sync and clipboard history do for a moment after each change.
+struct ClipboardHolder {
+    HANDLE ready = CreateEventW(nullptr,TRUE,FALSE,nullptr);
+    bool opened = false;
+    std::thread thread;
+    explicit ClipboardHolder(DWORD milliseconds) : thread([this,milliseconds]{
+        opened = ClipboardSnapshot::open(nullptr);
+        SetEvent(ready);
+        if(opened){Sleep(milliseconds);CloseClipboard();}
+    }) { WaitForSingleObject(ready,INFINITE); }
+    ~ClipboardHolder(){thread.join();CloseHandle(ready);}
+};

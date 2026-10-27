@@ -1102,19 +1102,17 @@ static bool editorMoveLines(App& app, bool down) {
 
 // --- Clipboard ---
 
-static void editorCopyToClipboard(HWND hwnd, const std::wstring& text) {
-    if (text.empty()) return;
-    if (!OpenClipboard(hwnd)) return;
-    EmptyClipboard();
-    size_t bytes = (text.size() + 1) * sizeof(wchar_t);
-    HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, bytes);
-    if (hMem) {
-        wchar_t* ptr = (wchar_t*)GlobalLock(hMem);
-        memcpy(ptr, text.c_str(), bytes);
-        GlobalUnlock(hMem);
-        SetClipboardData(CF_UNICODETEXT, hMem);
+// Another program can hold the clipboard open for a moment, as Remote
+// Desktop's clipboard sync and clipboard history do after each change, so
+// the copy is retried briefly, as in a table cell. Returns whether the text
+// is on the clipboard: Cut deletes only what it copied.
+static bool editorCopyToClipboard(HWND hwnd, const std::wstring& text) {
+    if (text.empty()) return false;
+    for (int attempt = 0; attempt < 10; ++attempt) {
+        if (copyToClipboard(hwnd, text)) return true;
+        Sleep(5);
     }
-    CloseClipboard();
+    return false;
 }
 
 static std::wstring editorGetClipboard(HWND hwnd) {
@@ -2757,14 +2755,12 @@ void handleEditorKeyDown(App& app, HWND hwnd, WPARAM wParam) {
             case 'X':
                 if (!app.editorExtraCarets.empty()) {
                     std::wstring cut = editorCaretSelectionsText(app);
-                    if (cut.empty()) return;
-                    editorCopyToClipboard(hwnd, cut);
+                    if (cut.empty() || !editorCopyToClipboard(hwnd, cut)) return;
                     editorEditAtCarets(app, [&](size_t) { editorDeleteSelection(app); });
                     scheduleReparse(app);
                     editorEnsureCursorVisible(app);
                     InvalidateRect(hwnd, nullptr, FALSE);
-                } else if (app.editorHasSelection) {
-                    editorCopyToClipboard(hwnd, editorGetSelectedText(app));
+                } else if (app.editorHasSelection && editorCopyToClipboard(hwnd, editorGetSelectedText(app))) {
                     editorDeleteSelection(app);
                     scheduleReparse(app);
                     editorEnsureCursorVisible(app);
@@ -3272,12 +3268,10 @@ void editorInsertSnippetPublic(App& app, HWND hwnd,
 void editorClipboardCut(App& app, HWND hwnd) {
     if (!app.editorExtraCarets.empty()) {
         std::wstring cut = editorCaretSelectionsText(app);
-        if (cut.empty()) return;
-        editorCopyToClipboard(hwnd, cut);
+        if (cut.empty() || !editorCopyToClipboard(hwnd, cut)) return;
         editorEditAtCarets(app, [&](size_t) { editorDeleteSelection(app); });
     } else {
-        if (!app.editorHasSelection) return;
-        editorCopyToClipboard(hwnd, editorGetSelectedText(app));
+        if (!app.editorHasSelection || !editorCopyToClipboard(hwnd, editorGetSelectedText(app))) return;
         editorDeleteSelection(app);
     }
     rebuildLineStarts(app);

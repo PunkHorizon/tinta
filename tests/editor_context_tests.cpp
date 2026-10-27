@@ -147,6 +147,25 @@ void clipboardActions(App& app, const std::wstring& source) {
                       << (copied == L"selection") << ", menu still open " << app.editCtxOpen << '\n';
         check(clipboardEquals(app,source.substr(unicode,end-unicode)),
               "menu Copy preserves emoji, combining marks and Chinese text");
+        // Another program can hold the clipboard open for a moment. Cut
+        // waits briefly for it, and while it stays held leaves the text
+        // instead of deleting what it could not copy.
+        app.editorScrollY = 0; select(app,word,word+9); point = characterPoint(app,word+2);
+        {
+            ClipboardHolder held(1000);
+            check(held.opened, "another program holds the clipboard");
+            right(app,point); menuAction(app,100);
+            check(app.editorText == source && app.editorHasSelection, "menu Cut keeps text it could not copy");
+            key(app,'X',false,true);
+            check(app.editorText == source && app.editorHasSelection, "Ctrl+X keeps text it could not copy");
+        }
+        {
+            ClipboardHolder moment(20);
+            key(app,'X',false,true);
+            check(clipboardEquals(app,L"selection") && app.editorText == source.substr(0,word)+source.substr(word+9),
+                  "Ctrl+X waits for a clipboard held for a moment");
+        }
+        key(app,'Z',false,true); check(app.editorText == source,"Undo restores the Cut that waited");
     }
     check(clipboardEquals(app,elsewhere), "the other application's clipboard is restored");
     check(oleClipboardText() == elsewhere, "OLE applications can paste the restored clipboard");
