@@ -71,13 +71,20 @@ void layoutTests(App& app) {
           "a bold span across a soft line break stays one span");
     check(has(all, L"<b>a &lt; b &amp; c &gt; d</b> and &quot;quotes&quot;"),
           "markup characters are escaped inside and outside bold");
-    check(has(all, L"<b>Please let me know in writing,</b><br>"),
-          "a bold paragraph closes before its line break");
+    check(has(all, L"<div><b>Please let me know in writing,</b></div>"),
+          "a bold paragraph closes with its line");
+    // With <br> between lines, Word and Outlook pasted the whole copy as one
+    // paragraph; a <div> per line gives a paragraph per line, as plain text
+    check(has(all, L"<div>Dear team,</div>\r\n<div><br></div>\r\n<div><b>Please review"),
+          "each line is a <div>, an empty line <div><br></div>");
+    check(!has(all, L"<br>\r\n"), "no line ends in a bare <br>");
     check(has(all, L"<b>north bed</b>") && has(all, L"<b>watering schedule</b>"),
           "bold inside list items");
     check(has(all, L"<b>bold inside</b> the quote"), "bold inside a blockquote");
-    check(has(all, L"<b>A12</b><span"), "bold inside a table cell");
-    check(has(all, L"<span style='mso-tab-count:1'>"), "table cells keep their tab separators");
+    check(has(all, L"<div><b>A12</b>&#9;ready</div>"), "bold inside a table cell");
+    // Word made two tabs of a tab wrapped in mso-tab-count
+    check(has(all, L"<div>Bed&#9;Status</div>") && !has(all, L"mso-tab-count"),
+          "a table cell's separator is one plain tab");
     check(has(all, L"<b>bold code</b> and plain code"), "bold inline code is bold, plain code is not");
     check(has(all, L"Code blocks copy as they read, **not bold**."),
           "a code block's asterisks are literal text");
@@ -92,7 +99,7 @@ void layoutTests(App& app) {
     check(at != std::wstring::npos, "the fixture's accented phrase is laid out");
     if (at != std::wstring::npos) {
         std::wstring part = selectionHtmlForRange(app, at + 2, at + 11);
-        check(part == L"<b>f\u00e9 na\u00efve</b>.", "partial bold selection: " + narrow(part));
+        check(part == L"<div><b>f\u00e9 na\u00efve</b>.</div>", "partial bold selection: " + narrow(part));
     }
     std::string payload = clipboardHtml(all);
     checkClipboardHtml(payload, "<b>A12</b> and <b>B7+3</b>.");
@@ -112,9 +119,7 @@ void layoutTests(App& app) {
 
 std::string clipboardFormat(HWND hwnd, UINT format) {
     std::string out;
-    bool opened = false;
-    for (int i = 0; i < 100 && !(opened = OpenClipboard(hwnd)); ++i) Sleep(5);
-    if (!opened) { check(false, "clipboard opens for inspection"); return out; }
+    if (!ClipboardSnapshot::open(hwnd)) { check(false, "clipboard opens for inspection"); return out; }
     if (HANDLE data = GetClipboardData(format)) {
         if (auto bytes = static_cast<const char*>(GlobalLock(data))) {
             out = bytes;
@@ -132,8 +137,10 @@ void clipboardTests(App& app) {
     keystroke(app, 'C', {true});
     std::string html = clipboardFormat(app.hwnd, RegisterClipboardFormatW(L"HTML Format"));
     checkClipboardHtml(html, "<b>A12</b> and <b>B7+3</b>.");
+    // Retried like the HTML read: over Remote Desktop the clipboard sync
+    // holds the clipboard for a moment after each change
     std::wstring text;
-    if (OpenClipboard(app.hwnd)) {
+    if (ClipboardSnapshot::open(app.hwnd)) {
         if (HANDLE data = GetClipboardData(CF_UNICODETEXT)) {
             if (auto chars = static_cast<const wchar_t*>(GlobalLock(data))) {
                 text = chars;

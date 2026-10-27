@@ -240,22 +240,33 @@ std::wstring selectionHtmlForRange(const App& app, size_t start, size_t end) {
     std::wstring html;
     auto range = app.docBoldRanges.begin();
     bool inBold = false;
+    bool inLine = false;
     bool lineStart = true;
     for (size_t i = start; i < end; i++) {
         while (range != app.docBoldRanges.end() && range->second <= i) ++range;
         bool bold = range != app.docBoldRanges.end() && range->first <= i;
         wchar_t c = app.docText[i];
-        // Line breaks close the bold span so each line stays balanced
-        if (inBold && (!bold || c == L'\n')) { html += L"</b>"; inBold = false; }
-        if (bold && !inBold && c != L'\n' && c != L'\r') { html += L"<b>"; inBold = true; }
+        if (c == L'\r') continue;
+        // Each line is a <div>, so Word and Outlook paste a paragraph per
+        // line as they do the plain text (with <br> the whole copy became
+        // one paragraph); a bold span closes with its line
+        if (c == L'\n') {
+            if (inBold) { html += L"</b>"; inBold = false; }
+            html += inLine ? L"</div>\r\n" : L"<div><br></div>\r\n";
+            inLine = false;
+            lineStart = true;
+            continue;
+        }
+        if (!inLine) { html += L"<div>"; inLine = true; }
+        if (inBold && !bold) { html += L"</b>"; inBold = false; }
+        if (bold && !inBold) { html += L"<b>"; inBold = true; }
         switch (c) {
-            case L'\r': break;
-            case L'\n': html += L"<br>\r\n"; lineStart = true; continue;
             case L'&': html += L"&amp;"; break;
             case L'<': html += L"&lt;"; break;
             case L'>': html += L"&gt;"; break;
             case L'"': html += L"&quot;"; break;
-            case L'\t': html += L"<span style='mso-tab-count:1'>&#9;</span>"; break;
+            // A plain tab is one tab in Word; mso-tab-count around it made two
+            case L'\t': html += L"&#9;"; break;
             case L' ': {
                 // HTML collapses runs of spaces; keep the copied ones
                 bool next = i + 1 < end && app.docText[i + 1] == L' ';
@@ -267,6 +278,7 @@ std::wstring selectionHtmlForRange(const App& app, size_t start, size_t end) {
         lineStart = false;
     }
     if (inBold) html += L"</b>";
+    if (inLine) html += L"</div>";
     return html;
 }
 
