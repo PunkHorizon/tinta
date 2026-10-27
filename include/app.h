@@ -723,7 +723,7 @@ struct App {
     std::wstring themeEditorHex[14];     // base colours, h1-h6, highlight bg/text
     int themeEditorField = -1;          // focused field: 0..13 hex, 14 = name
     int themeEditorBase = 0;            // registry index the colors started from
-    float themeEditorFontScroll = 0.0f;
+    float themeEditorFontScroll = 0.0f;  // below 0: centre the chosen face when next drawn
     bool themeEditorHeadingsOpen = false;
     float themeEditorColorScroll = 0.0f;
     D2D1_RECT_F themeEditorColorListRect{};

@@ -4025,6 +4025,19 @@ void renderThemeEditor(App& app) {
         float fontRowHeight = dpi(app, 26.0f);
         float maxScroll = std::max(0.0f,
             (float)rows * fontRowHeight - (list.bottom - list.top));
+        if (app.themeEditorFontScroll < 0.0f) {
+            // Opening the editor, its base arrows and Text / Headings / Code
+            // centre the chosen face, here where the list's height is known
+            // (#284)
+            int row = 0;
+            for (size_t i = 0; !chosen.empty() && i < app.systemFontFamilies.size(); i++) {
+                if (_wcsicmp(app.systemFontFamilies[i].c_str(), chosen.c_str()) == 0) {
+                    row = (int)i + lead;
+                    break;
+                }
+            }
+            app.themeEditorFontScroll = row * fontRowHeight - (list.bottom - list.top - fontRowHeight) / 2;
+        }
         app.themeEditorFontScroll = std::max(0.0f, std::min(app.themeEditorFontScroll, maxScroll));
         int first = (int)(app.themeEditorFontScroll / fontRowHeight);
         int visible = (int)((list.bottom - list.top) / fontRowHeight) + 2;

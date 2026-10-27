@@ -605,7 +605,7 @@ static void openThemeEditor(App& app, bool editCurrent) {
     themeEditorAdoptBase(app, app.currentThemeIndex);
     app.themeEditorName = editCurrent ? app.theme.name : tr(app, "theme.editor.default_name");
     app.themeEditorField = 14;  // name focused first
-    app.themeEditorFontScroll = 0.0f;
+    app.themeEditorFontScroll = -1.0f;  // on the chosen face (#284)
     app.themeEditorColorScroll = 0.0f;
     app.themeEditorHeadingsOpen = false;
     app.themeEditorFontRole = 0;
@@ -2951,20 +2951,7 @@ void handleMouseUp(App& app, HWND hwnd, WPARAM, LPARAM lParam) {
             } else if (action >= TE_FONT_TEXT && action <= TE_FONT_CODE) {
                 // Switch the list to another face and scroll to its choice
                 app.themeEditorFontRole = action - TE_FONT_TEXT;
-                const std::wstring& face = app.themeEditorFontRole == 1 ? app.themeEditorHeadingFont
-                                         : app.themeEditorFontRole == 2 ? app.themeEditorCodeFont
-                                         : app.themeEditorFont;
-                int lead = app.themeEditorFontRole == 1 ? 1 : 0;
-                int row = 0;
-                for (size_t i = 0; !face.empty() && i < app.systemFontFamilies.size(); i++) {
-                    if (_wcsicmp(app.systemFontFamilies[i].c_str(), face.c_str()) == 0) {
-                        row = (int)i + lead;
-                        break;
-                    }
-                }
-                float rowH = dpi(app, 26.0f);
-                float listH = app.themeEditorFontListRect.bottom - app.themeEditorFontListRect.top;
-                app.themeEditorFontScroll = std::max(0.0f, row * rowH - (listH - rowH) / 2);
+                app.themeEditorFontScroll = -1.0f;
             } else if (action >= TE_FIELD_BG && action <= TE_FIELD_HIGHLIGHT_TEXT) {
                 app.themeEditorField = action - TE_FIELD_BG;
             } else if (action == TE_FIELD_NAME) {
@@ -2973,6 +2960,7 @@ void handleMouseUp(App& app, HWND hwnd, WPARAM, LPARAM lParam) {
                 int n = themeCount();
                 int base = app.themeEditorBase + (action == TE_BASE_NEXT ? 1 : n - 1);
                 themeEditorAdoptBase(app, base % n);
+                app.themeEditorFontScroll = -1.0f;  // on the base's face
             } else if (action == TE_HEADINGS) {
                 app.themeEditorHeadingsOpen = !app.themeEditorHeadingsOpen;
                 app.themeEditorField = -1;
