@@ -191,6 +191,19 @@ int main() {
     check(std::wstring(tr(it, "help.general.new_note")) == L"Nuova nota rapida",
           "Italian quick-note help row");
 
+    // Keeping deleted files in memory reads in every shipped language (#283)
+    for (int lang : {zh, ja, ko, de, fr, it, ru}) {
+        for (const char* key : {"settings.keep_deleted_tabs", "settings.keep_deleted_tabs.hint"}) {
+            check(std::wstring(tr(lang, key)) != tr(en, key), "the deleted-files setting is translated");
+        }
+    }
+    check(std::wstring(tr(zh, "settings.keep_deleted_tabs")) ==
+              L"\u5C06\u5DF2\u5220\u9664\u6587\u4EF6\u4FDD\u7559\u5728\u5185\u5B58\u4E2D",
+          "Chinese deleted-files setting");
+    check(std::wstring(tr(fr, "settings.keep_deleted_tabs.hint")) ==
+              L"Consommation de RAM accrue jusqu'\u00E0 la fermeture de Tinta",
+          "French deleted-files hint");
+
     // search.match_count is the one runtime-printf'd string: the fixed
     // argument order (%d current, %zu total) must survive translation
     for (int lang : {de, fr, it}) {
