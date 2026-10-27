@@ -7,6 +7,8 @@
 #include <windows.h>
 #include <shellapi.h>
 #include <algorithm>
+#include <cstdio>
+#include <cstring>
 
 std::wstring toWide(const std::string& str) {
     if (str.empty()) return L"";
@@ -237,6 +239,103 @@ bool copyToClipboard(HWND hwnd, const std::wstring& text) {
     }
     bool copied = EmptyClipboard() && SetClipboardData(CF_UNICODETEXT, hMem);
     if (!copied) GlobalFree(hMem);  // ownership transfers only on success
+    CloseClipboard();
+    return copied;
+}
+
+// Outlook's own font for new mail, as CSS, so pasted text matches what is
+// typed around it; without it Word-based editors fall back to Times New
+// Roman for HTML. Empty when Outlook has not stored one.
+static std::string mailComposeCss() {
+    BYTE data[8192];
+    DWORD size = sizeof(data);
+    if (RegGetValueW(HKEY_CURRENT_USER,
+                     L"Software\\Microsoft\\Office\\16.0\\Common\\MailSettings",
+                     L"ComposeFontComplex", RRF_RT_REG_BINARY, nullptr, data,
+                     &size) != ERROR_SUCCESS) {
+        return {};
+    }
+    std::string style(reinterpret_cast<const char*>(data), size);
+    auto declaration = [&](const char* property) -> std::string {
+        size_t at = style.find(property);
+        // Skip mso-ascii-font-family and the like: only the plain property
+        while (at != std::string::npos && at > 0 && style[at - 1] == '-') {
+            at = style.find(property, at + 1);
+        }
+        if (at == std::string::npos) return {};
+        size_t valueStart = at + strlen(property);
+        size_t valueEnd = style.find_first_of(";}", valueStart);
+        if (valueEnd == std::string::npos) return {};
+        std::string value = style.substr(valueStart, valueEnd - valueStart);
+        if (value.find_first_of("<>'") != std::string::npos) return {};
+        return value;
+    };
+    std::string css;
+    std::string family = declaration("font-family:");
+    if (!family.empty()) css += "font-family:" + family + ";";
+    std::string sizePt = declaration("mso-ansi-font-size:");
+    if (!sizePt.empty()) css += "font-size:" + sizePt + ";";
+    return css;
+}
+
+std::string clipboardHtml(const std::wstring& htmlFragment) {
+    std::string fragment;
+    if (!htmlFragment.empty()) {
+        int len = WideCharToMultiByte(CP_UTF8, 0, htmlFragment.c_str(),
+                                      (int)htmlFragment.size(), nullptr, 0,
+                                      nullptr, nullptr);
+        fragment.resize(len);
+        WideCharToMultiByte(CP_UTF8, 0, htmlFragment.c_str(),
+                            (int)htmlFragment.size(), fragment.data(), len,
+                            nullptr, nullptr);
+    }
+    std::string css = mailComposeCss();
+    std::string open = css.empty() ? "<div>" : "<div style='" + css + "'>";
+    const std::string close = "</div>";
+    const char* header =
+        "Version:0.9\r\nStartHTML:%010zu\r\nEndHTML:%010zu\r\n"
+        "StartFragment:%010zu\r\nEndFragment:%010zu\r\n";
+    size_t headerLength = (size_t)snprintf(nullptr, 0, header,
+                                           (size_t)0, (size_t)0, (size_t)0, (size_t)0);
+    const std::string prefix =
+        "<html><head><meta http-equiv='Content-Type' "
+        "content='text/html; charset=utf-8'></head><body>\r\n<!--StartFragment-->";
+    const std::string suffix = "<!--EndFragment-->\r\n</body></html>";
+    size_t startHtml = headerLength;
+    size_t startFragment = startHtml + prefix.size();
+    size_t endFragment = startFragment + open.size() + fragment.size() + close.size();
+    size_t endHtml = endFragment + suffix.size();
+    std::string out(headerLength + 1, '\0');
+    snprintf(out.data(), out.size(), header, startHtml, endHtml, startFragment, endFragment);
+    out.resize(headerLength);
+    return out + prefix + open + fragment + close + suffix;
+}
+
+bool copyRichTextToClipboard(HWND hwnd, const std::wstring& text,
+                             const std::wstring& htmlFragment) {
+    if (text.empty()) return false;
+    static const UINT htmlFormat = RegisterClipboardFormatW(L"HTML Format");
+    std::string html = clipboardHtml(htmlFragment);
+    auto globalCopy = [](const void* bytes, size_t size) -> HGLOBAL {
+        HGLOBAL mem = GlobalAlloc(GMEM_MOVEABLE, size);
+        if (!mem) return nullptr;
+        void* dest = GlobalLock(mem);
+        if (!dest) { GlobalFree(mem); return nullptr; }
+        memcpy(dest, bytes, size);
+        GlobalUnlock(mem);
+        return mem;
+    };
+    HGLOBAL textMem = globalCopy(text.c_str(), (text.size() + 1) * sizeof(wchar_t));
+    if (!textMem) return false;
+    HGLOBAL htmlMem = htmlFormat ? globalCopy(html.c_str(), html.size() + 1) : nullptr;
+    if (!OpenClipboard(hwnd)) {
+        GlobalFree(textMem);
+        if (htmlMem) GlobalFree(htmlMem);
+        return false;
+    }
+    bool copied = EmptyClipboard() && SetClipboardData(CF_UNICODETEXT, textMem);
+    if (!copied) GlobalFree(textMem);  // ownership transfers only on success
+    if (htmlMem && !(copied && SetClipboardData(htmlFormat, htmlMem))) GlobalFree(htmlMem);
     CloseClipboard();
     return copied;
 }

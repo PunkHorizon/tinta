@@ -29,6 +29,11 @@ void updateWindowTitle(App& app);
 void launchQuickNoteWindow();
 void openUrl(const std::string& url);
 bool copyToClipboard(HWND hwnd, const std::wstring& text);
+// Plain text plus an HTML fragment ("HTML Format") for rich paste targets
+bool copyRichTextToClipboard(HWND hwnd, const std::wstring& text,
+                             const std::wstring& htmlFragment);
+// The CF_HTML payload (UTF-8, with its offset header) for a fragment
+std::string clipboardHtml(const std::wstring& htmlFragment);
 // What a code block's Copy button puts on the clipboard: its lines without
 // the line break that ends the last one (#269)
 std::wstring codeCopyText(const std::wstring& code);

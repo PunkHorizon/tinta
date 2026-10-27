@@ -140,6 +140,17 @@ static void addTextRun(App& app, LayoutInfo&& info, const D2D1_POINT_2F& pos,
     }
 }
 
+// Records docText[start, end) as bold, joining a range it continues
+static void markBold(App& app, size_t start, size_t end) {
+    if (start >= end) return;
+    auto& ranges = app.docBoldRanges;
+    if (!ranges.empty() && ranges.back().second >= start) {
+        ranges.back().second = std::max(ranges.back().second, end);
+    } else {
+        ranges.push_back({start, end});
+    }
+}
+
 struct LayoutSnapshot {
     size_t textRuns, rects, lines, shapes, connectors, bitmaps;
     size_t links, textRects, lineBuckets, docTextLen, tasks, anchors;
@@ -183,6 +194,9 @@ static void rollbackTo(App& app, const LayoutSnapshot& s) {
     app.textRects.resize(s.textRects);
     app.lineBuckets.resize(s.lineBuckets);
     app.docText.resize(s.docTextLen);
+    auto& bold = app.docBoldRanges;
+    while (!bold.empty() && bold.back().first >= s.docTextLen) bold.pop_back();
+    if (!bold.empty()) bold.back().second = std::min(bold.back().second, s.docTextLen);
     app.taskRects.resize(s.tasks);
     app.htmlAnchors.resize(s.anchors);  // a trial layout's anchors sit at trial positions
 }
@@ -623,6 +637,7 @@ static void layoutInlineContent(App& app, const std::vector<ElementPtr>& element
                            codeDocStart, text.length(), true);
 
                 app.docText += text;
+                if (run.style.bold) markBold(app, codeDocStart, app.docText.size());
                 if (isLink) addLinkSegment(x, x + textWidth, y, linkUrl, color);
                 if (hasUnderline) {
                     addUnderline(run.style, x, x + textWidth, y, y + drawYOffset + baselineOf(textFormat),
@@ -1013,6 +1028,7 @@ static void layoutInlineContent(App& app, const std::vector<ElementPtr>& element
         if (measureInfo.layout) measureInfo.layout->Release();
 
         app.docText += text;
+        if (run.style.bold) markBold(app, textDocStart, app.docText.size());
 
         if (isLink && lastWordEndX > linkLineStartX) {
             addLinkSegment(linkLineStartX, lastWordEndX, linkLineY, linkUrl, color);

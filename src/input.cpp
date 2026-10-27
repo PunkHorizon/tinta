@@ -320,6 +320,7 @@ bool openDocumentSourceInViewer(App& app, const std::wstring& fullPath,
     app.scrollbarContentHeight = 0.0f;
     app.docText.clear();
     std::wstring().swap(app.docTextLower);
+    app.docBoldRanges.clear();
     app.searchMatches.clear();
     clearSelection(app);  // offsets belong to the old docText
     app.layoutDirty = true;
@@ -1698,11 +1699,9 @@ static void invokeContextMenuAction(App& app, HWND hwnd, int item) {
     switch (item) {
         case CTX_COPY:
             if (app.hasSelection && app.selAnchor != app.selFocus) {
-                std::wstring selected = selectionTextForRange(
-                    app, std::min(app.selAnchor, app.selFocus),
-                    std::max(app.selAnchor, app.selFocus));
-                if (selected.empty()) break;
-                copyToClipboard(hwnd, selected);
+                if (!copySelectionRange(app, hwnd,
+                                        std::min(app.selAnchor, app.selFocus),
+                                        std::max(app.selAnchor, app.selFocus))) break;
                 app.hasSelection = false;
                 signalPushKey(app, SIG_INFO, SIGI_COPY, "toast.copied");
             }
@@ -3844,11 +3843,9 @@ bool handleKeyDown(App& app, HWND hwnd, WPARAM wParam) {
         if (tableEditKeyDown(app, hwnd, wParam)) return false;
         if (ctrl && wParam == 'C' && app.hasSelection &&
             app.selAnchor != app.selFocus) {
-            std::wstring selected = selectionTextForRange(
-                app, std::min(app.selAnchor, app.selFocus),
-                std::max(app.selAnchor, app.selFocus));
-            if (selected.empty()) return false;
-            copyToClipboard(hwnd, selected);
+            if (!copySelectionRange(app, hwnd,
+                                    std::min(app.selAnchor, app.selFocus),
+                                    std::max(app.selAnchor, app.selFocus))) return false;
             signalPushKey(app, SIG_INFO, SIGI_COPY, "toast.copied");
             app.hasSelection = false;
             InvalidateRect(hwnd, nullptr, FALSE);
@@ -3958,13 +3955,9 @@ bool handleKeyDown(App& app, HWND hwnd, WPARAM wParam) {
                 // Copy - copy selected text or all text if select all was used
                 bool copied = false;
                 if (app.hasSelection && app.selAnchor != app.selFocus) {
-                    std::wstring selected = selectionTextForRange(
-                        app, std::min(app.selAnchor, app.selFocus),
+                    copied = copySelectionRange(
+                        app, hwnd, std::min(app.selAnchor, app.selFocus),
                         std::max(app.selAnchor, app.selFocus));
-                    if (!selected.empty()) {
-                        copyToClipboard(hwnd, selected);
-                        copied = true;
-                    }
                     app.hasSelection = false;
                 } else if (app.root) {
                     // If no selection, copy all

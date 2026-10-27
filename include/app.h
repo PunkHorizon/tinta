@@ -1083,6 +1083,9 @@ struct App {
     // Document text built during render (used for search/mapping)
     std::wstring docText;
     std::wstring docTextLower;
+    // docText ranges set in **bold**, ascending and disjoint; a copy from
+    // the viewer carries them to mail and word processors as HTML
+    std::vector<std::pair<size_t, size_t>> docBoldRanges;
 
     // Cached space widths for common formats
     float spaceWidthText = 0.0f;
@@ -1478,6 +1481,7 @@ struct App {
         lineBuckets.clear();
         docText.clear();
         docTextLower.clear();
+        docBoldRanges.clear();
         headings.clear();
         headingSlugCounts.clear();
         footnoteAnchors.clear();
