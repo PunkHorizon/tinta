@@ -90,12 +90,30 @@ checks fail. The full suite passes 49 of 49.
 
 ## Checked in the built app
 
-Real touch input could not be put into the built app here. The machine is
-reached over Remote Desktop with its window minimized, and Windows refuses
-injected touch input in that state: `InjectTouchInput` fails, and
-`InjectSyntheticPointerInput` returns access denied. The injection script
-(`out/verify-286/`, ignored) checks that every contact point is on the
-test window before it sends anything; it ran no gesture.
+Real touch input went into the built `tinta.exe` (an isolated portable
+copy at 1050 x 820) through `InjectSyntheticPointerInput`, a synthetic
+touch device. The window was raised for the run, and every contact point
+was checked to be on it before anything was sent. Each scenario ran in a
+fresh instance and was read back from the reading position the app saved
+for the file on `WM_CLOSE`:
+
+| Scenario | Before | After |
+| --- | --- | --- |
+| A finger pans up 300 px, rests, lifts | 0 | 300.0 |
+| A flick up 240 px in about 80 ms | 0 | 855.9 |
+| Tab, a tap on the Contents' third row | 838.4 | 838.4 |
+| Tab, the Contents list panned up 300 px, a tap on its last row | 2965.2 | 7230.8 |
+
+Before, a finger's drag selected text and the page stayed at the top, and
+the Contents list did not pan, so its last row was an earlier section; a
+tap worked as a click in both. Screenshots (`out/verify-286/shots/`,
+ignored): a press held on the first paragraph and slid to the next line
+selects word by word while the finger is down (`held.png`), and on the lift
+the context menu opens at the finger over the kept selection, with Copy
+enabled (`3-lifted-menu.png`). Before the first runs the Remote Desktop
+display was minimized, and Windows refused injected touch input
+(`InjectSyntheticPointerInput` returned access denied); with the display
+up it works.
 
 The same build ran the #287 mouse scenarios in the real app (posted mouse
 messages, results read back from the saved reading position): the
@@ -105,9 +123,8 @@ touch, so pointer handling leaves the mouse alone.
 
 ## Limitations
 
-- Not yet tried with a finger on a touchscreen. The window procedure's
-  pointer handling (`handlePointerMessage`: the pointer's type, position
-  and time) is exercised only through the functions it calls.
+- Touch was injected, not given by a finger on a touchscreen; the
+  injected contacts take the same path through `WM_POINTER*` messages.
 - Pinch to zoom is not handled; a second finger is ignored.
 - The editor pans up and down only: unwrapped lines have no right end to
   stop a sideways pan at.

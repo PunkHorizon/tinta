@@ -100,10 +100,14 @@ end; before, the bar did not move and the click opened a middle section.
 At 650 x 700 the fixed build gave 0, 0 and the page's end (11231.6) as
 well. Scripts and output are in `out/verify-287/` (ignored).
 
+Later the same day, with the display available, screenshots of the built
+app (`out/verify-287/shots*/`, ignored) showed the Contents bar at the
+panel's right edge, darker and wider under the pointer, at 1050 and 650
+px wide, and the file browser's bar in a folder of 47 entries, lit under
+the pointer and drawn clear of the panel's resize edge.
+
 ## Limitations
 
-- The screen was not available, so the bars were not looked at in the
-  built app; their drawn geometry is the one the tests check.
 - The editor's own scrollbar (edit mode, left pane) runs the full window
   height under the tab strip; its drawing and dragging already agree, and
   it is unchanged.
