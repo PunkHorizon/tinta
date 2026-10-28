@@ -470,6 +470,13 @@ static float runBaseline(App& app, IDWriteTextLayout* layout, IDWriteTextFormat*
     return baseline >= 0.0f ? baseline : formatBaseline(app, format);
 }
 
+// The ==highlight== an inline element sits in, if any
+static const Element* highlightSpanOf(const Element* elem) {
+    for (; elem; elem = elem->parent)
+        if (elem->type == ElementType::Highlight) return elem;
+    return nullptr;
+}
+
 static void layoutInlineContent(App& app, const std::vector<ElementPtr>& elements,
                                 float startX, float& y, float maxWidth,
                                 IDWriteTextFormat* baseFormat, D2D1_COLOR_F baseColor,
@@ -582,6 +589,42 @@ static void layoutInlineContent(App& app, const std::vector<ElementPtr>& element
     }
     lineHeight += mathTextOffset + mathBelow;
 
+    // A highlight is drawn in pieces, one per text segment and math box,
+    // each padded 2 px on both sides. Its colour is translucent, so pieces
+    // that meet on a line (==x^2^==, ==a $x$ b==) join rather than overlap
+    // into a darker strip. Pieces of one highlight also bridge the space
+    // between their runs; separate highlights only stop overlapping. Pieces
+    // of equal height merge into one band. Beside a taller math box the text
+    // band ends at the box, which keeps its full height.
+    size_t bgPiece = SIZE_MAX;  // the latest piece, in layoutRects
+    float bgPieceY = 0.0f;
+    const Element* bgPieceSpan = nullptr;
+    bool bgSpanBroken = false;  // a code chip, ruby or image came since
+    auto addHighlight = [&](D2D1_RECT_F rect, D2D1_COLOR_F color, const Element* span) {
+        if (bgPiece < app.layoutRects.size() && bgPieceY == y) {
+            D2D1_RECT_F& prev = app.layoutRects[bgPiece].rect;
+            if ((span && span == bgPieceSpan && !bgSpanBroken) || rect.left < prev.right) {
+                bgPieceSpan = span;
+                bgSpanBroken = false;
+                if (rect.top == prev.top && rect.bottom == prev.bottom) {
+                    prev.right = std::max(prev.right, rect.right);
+                    return;
+                }
+                // A whole-pixel joint leaves no antialiased seam on screen
+                bool taller = rect.top <= prev.top && rect.bottom >= prev.bottom;
+                float joint = std::round(taller ? rect.left : prev.right);
+                prev.right = std::max(prev.left, joint);
+                rect.left = joint;
+                if (rect.right <= rect.left) return;
+            }
+        }
+        bgPiece = app.layoutRects.size();
+        bgPieceY = y;
+        bgPieceSpan = span;
+        bgSpanBroken = false;
+        app.layoutRects.push_back({rect, color});
+    };
+
     for (size_t runIndex = 0; runIndex < runs.size(); runIndex++) {
         const auto& run = runs[runIndex];
         const ElementPtr& elem = run.elem;
@@ -601,6 +644,10 @@ static void layoutInlineContent(App& app, const std::vector<ElementPtr>& element
         linkUnderInsertion = hasUnderline;
         if (!hasUnderline) underlineEndX = -1.0f;
         D2D1_COLOR_F bgColor = run.style.bgColor;
+        const Element* bgSpan = hasBg ? highlightSpanOf(elem.get()) : nullptr;
+        // These draw no highlight, so the band does not bridge across them
+        if (elem->type == ElementType::Code || elem->type == ElementType::Ruby ||
+            elem->type == ElementType::Image) bgSpanBroken = true;
         float drawYOffset = run.style.drawYOffset + mathTextOffset;
         bool wrappedCode = false;
 
@@ -694,10 +741,10 @@ static void layoutInlineContent(App& app, const std::vector<ElementPtr>& element
                 float textBaseline = mathBaselines[runIndex];
                 float boxTop = y + drawYOffset + textBaseline - mathBoxBaseline(box);
                 if (hasBg) {
-                    app.layoutRects.push_back({D2D1::RectF(x - 2,
+                    addHighlight(D2D1::RectF(x - 2,
                         std::min(boxTop, y + mathTextOffset + 1), x + w + 2,
                         std::max(boxTop + mathBoxHeight(box), y + mathTextOffset + normalLineHeight - 1)),
-                        bgColor});
+                        bgColor, bgSpan);
                 }
                 if (hasStrike) {
                     float strikeY = y + mathTextOffset + normalLineHeight * 0.55f;
@@ -923,10 +970,9 @@ static void layoutInlineContent(App& app, const std::vector<ElementPtr>& element
                         codeBox});
                 }
             } else if (hasBg) {
-                app.layoutRects.push_back({
-                    D2D1::RectF(segX - 2, y + mathTextOffset + 1, segX + segWidth + 2,
-                                y + mathTextOffset + normalLineHeight - 1),
-                    bgColor});
+                addHighlight(D2D1::RectF(segX - 2, y + mathTextOffset + 1, segX + segWidth + 2,
+                                         y + mathTextOffset + normalLineHeight - 1),
+                             bgColor, bgSpan);
             }
             if (hasStrike) {
                 float strikeY = y + mathTextOffset + normalLineHeight * 0.55f;

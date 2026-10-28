@@ -183,6 +183,7 @@ int runSearchPanelTests();
 int runTableInputTests();
 int runDockedPreviewTests();
 int runTableLayoutTests();
+int runHighlightLayoutTests();
 int runWindowDragTests();
 int runSearchInputTests();
 int runWrappedCursorTests();
@@ -215,6 +216,7 @@ int main(int argc, char** argv) {
     if (argc == 3 && std::string(argv[1]) == "--touch-tests") return runTouchTests(argv[2]);
     if (argc == 2 && std::string(argv[1]) == "--window-drag-tests") return runWindowDragTests();
     if (argc == 2 && std::string(argv[1]) == "--table-layout-tests") return runTableLayoutTests();
+    if (argc == 2 && std::string(argv[1]) == "--highlight-layout-tests") return runHighlightLayoutTests();
     if (argc == 2 && std::string(argv[1]) == "--table-input-tests") return runTableInputTests();
     if (argc == 2 && std::string(argv[1]) == "--docked-preview-tests") return runDockedPreviewTests();
     if (argc == 2 && std::string(argv[1]) == "--editor-context-tests") return runEditorContextTests();
