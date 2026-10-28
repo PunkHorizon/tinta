@@ -1,5 +1,7 @@
 #include "i18n.h"
 
+#include <windows.h>
+
 #include <cctype>
 #include <filesystem>
 #include <fstream>
@@ -120,26 +122,43 @@ int main() {
              it != std::wsregex_iterator(); ++it) result += it->str() + L";";
         return result;
     };
+    // A count lists its plural forms split by '|', as many as the
+    // language's rule has; each form keeps the English argument
+    const std::set<std::string> counts = {"fm.ago.minutes", "fm.ago.hours", "fm.ago.days", "fm.in.minutes",
+                                          "fm.in.hours", "fm.in.days", "fm.items"};
+    auto arguments = [&](const char* key, const wchar_t* text) {
+        if (!counts.count(key)) return formats(text);
+        std::set<std::wstring> forms;
+        const std::wstring value(text);
+        for (size_t start = 0;;) {
+            const size_t bar = value.find(L'|', start);
+            forms.insert(formats(value.substr(start, bar == std::wstring::npos ? bar : bar - start).c_str()));
+            if (bar == std::wstring::npos) break;
+            start = bar + 1;
+        }
+        std::wstring result;
+        for (const auto& form : forms) result += form + L"|";
+        return result;
+    };
     for (const auto& entry : russian) {
         check(russianKeys.insert(entry.key).second, "Russian translation keys are unique");
         check(std::wstring(tr(ru, entry.key)) == entry.text, "Russian translation lookup resolves the built-in text");
-        check(formats(tr(en, entry.key)) == formats(entry.text), "Russian preserves printf arguments and order");
+        check(arguments(entry.key, tr(en, entry.key)) == arguments(entry.key, entry.text),
+              "Russian preserves printf arguments and order");
     }
-    check(russianKeys.size() == 361, "Russian covers every current interface key");
+    check(russianKeys.size() == 368, "Russian covers every current interface key");
     // Every shipped language has its own text for every key, with the
     // English printf arguments in order. A few read the same everywhere
-    // and stay out of the de/fr/it table: the window titles, the key
-    // profiles, and the sample date (the property strip writes dates in
-    // English)
+    // and stay out of the de/fr/it table: the window titles and the key
+    // profiles
     const std::set<std::string> sameEverywhere = {"title.plain", "title.dirty", "title.no_file",
-                                                  "settings.profile.windows", "settings.profile.vim",
-                                                  "fm.absolute"};
+                                                  "settings.profile.windows", "settings.profile.vim"};
     for (int lang : {zh, ja, ko, de, fr, it, ru}) {
         for (const auto& entry : russian) {
             if (sameEverywhere.count(entry.key)) continue;
             const std::string where = languageIdAt(lang) + " " + entry.key;
             check(languageTranslatesKey(lang, entry.key), ("translated: " + where).c_str());
-            check(formats(tr(lang, entry.key)) == formats(tr(en, entry.key)),
+            check(arguments(entry.key, tr(lang, entry.key)) == arguments(entry.key, tr(en, entry.key)),
                   ("printf arguments kept: " + where).c_str());
         }
     }
@@ -237,6 +256,79 @@ int main() {
         const wchar_t* fmt = tr(lang, "search.match_count");
         check(contains(fmt, L"%d"), "match_count keeps %d");
         check(contains(fmt, L"%zu"), "match_count keeps %zu");
+    }
+
+    // Counts take the form of the language's plural rule: the property
+    // strip's relative dates and list counts
+    check(trCount(en, "fm.ago.days", 1) == L"1 day ago" && trCount(en, "fm.ago.days", 5) == L"5 days ago",
+          "English counts are singular for one");
+    check(trCount(en, "fm.items", 1) == L"1 item" && trCount(en, "fm.items", 0) == L"0 items",
+          "English list count");
+    check(trCount(de, "fm.ago.days", 1) == L"vor 1 Tag" && trCount(de, "fm.in.days", 3) == L"in 3 Tagen",
+          "German counts");
+    check(trCount(fr, "fm.ago.hours", 1) == L"il y a 1 heure" && trCount(fr, "fm.ago.hours", 2) == L"il y a 2 heures",
+          "French counts");
+    const struct { long long count; const wchar_t* text; } russianDays[] = {
+        {1, L"1 \u0434\u0435\u043D\u044C \u043D\u0430\u0437\u0430\u0434"},
+        {2, L"2 \u0434\u043D\u044F \u043D\u0430\u0437\u0430\u0434"},
+        {5, L"5 \u0434\u043D\u0435\u0439 \u043D\u0430\u0437\u0430\u0434"},
+        {11, L"11 \u0434\u043D\u0435\u0439 \u043D\u0430\u0437\u0430\u0434"},
+        {21, L"21 \u0434\u0435\u043D\u044C \u043D\u0430\u0437\u0430\u0434"},
+        {22, L"22 \u0434\u043D\u044F \u043D\u0430\u0437\u0430\u0434"},
+        {112, L"112 \u0434\u043D\u0435\u0439 \u043D\u0430\u0437\u0430\u0434"},
+        {124, L"124 \u0434\u043D\u044F \u043D\u0430\u0437\u0430\u0434"},
+    };
+    for (const auto& c : russianDays) {
+        check(trCount(ru, "fm.ago.days", c.count) == c.text, "Russian counts take one, few or many");
+    }
+    check(trCount(ja, "fm.ago.days", 1) == L"1 \u65E5\u524D" && trCount(ja, "fm.ago.days", 3) == L"3 \u65E5\u524D",
+          "Japanese counts have one form");
+    // Text that falls back to English is counted by English's rule
+    const int es = languageIndexById("es");
+    check(es >= 0 && trCount(es, "fm.ago.days", 21) == L"21 days ago", "an untranslated count reads as English");
+
+    // Dates follow the user's regional format when it is in the interface
+    // language, else the language's own
+    check(dateLocaleFor("en", L"en-GB") == L"en-GB", "English dates follow a British region");
+    check(dateLocaleFor("en", L"de-DE") == L"en-US", "a region in another language gives the language's own");
+    check(dateLocaleFor("de", L"de-AT") == L"de-AT", "German dates follow an Austrian region");
+    check(dateLocaleFor("ja", L"") == L"ja-JP", "Japanese dates resolve to Japan");
+    check(dateLocaleFor("zh-tw", L"zh-CN") == L"zh-TW", "a language with its own region keeps it");
+    // A long date loses its weekday and abbreviates its month; quoted text
+    // and the order stay as the locale has them
+    const struct { const wchar_t* from; const wchar_t* to; } pictures[] = {
+        {L"dddd, MMMM d, yyyy", L"MMM d, yyyy"},
+        {L"dd MMMM yyyy", L"d MMM yyyy"},
+        {L"dddd, d. MMMM yyyy", L"d. MMM yyyy"},
+        {L"dddd d MMMM yyyy", L"d MMM yyyy"},
+        {L"d MMMM yyyy '\u0433.'", L"d MMM yyyy '\u0433.'"},
+        {L"yyyy'\u5E74'M'\u6708'd'\u65E5'", L"yyyy'\u5E74'M'\u6708'd'\u65E5'"},
+        {L"yyyy'\uB144' M'\uC6D4' d'\uC77C' dddd", L"yyyy'\uB144' M'\uC6D4' d'\uC77C'"},
+        {L"dddd, d' de 'MMMM' de 'yyyy", L"d' de 'MMM' de 'yyyy"},
+        {L"d MMMM yyyy dddd", L"d MMM yyyy"},
+        {L"'den 'd MMMM yyyy", L"'den 'd MMM yyyy"},
+        {L"d 'o''clock' MMMM", L"d 'o''clock' MMM"},
+        {L"MMMM d", L"MMM d"},
+        {L"d. MMMM", L"d. MMM"},
+    };
+    for (const auto& p : pictures) check(shortDatePicture(p.from) == p.to, "a short date picture");
+    check(formatDate(L"en-US", 2026, 1, 3) == L"Jan 3, 2026", "US English date");
+    check(formatDate(L"en-US", 2026, 1, 3, false) == L"Jan 3", "US English month and day");
+    check(formatDate(L"en-GB", 2026, 1, 3) == L"3 Jan 2026", "British English date");
+    check(formatDate(L"ja-JP", 2026, 1, 3) == L"2026\u5E741\u67083\u65E5", "Japanese date");
+    check(formatDate(L"ja-JP", 2026, 1, 3, false) == L"1\u67083\u65E5", "Japanese month and day");
+    check(formatDate(L"ko-KR", 2026, 1, 3) == L"2026\uB144 1\uC6D4 3\uC77C", "Korean date without its weekday");
+    check(formatDate(L"ko-KR", 2026, 1, 3, false) == L"1\uC6D4 3\uC77C", "Korean month and day");
+    // The rest name the month as the locale abbreviates it, and 3 January
+    // 2026, a Saturday, has no weekday
+    for (const wchar_t* locale : {L"de-DE", L"fr-FR", L"it-IT", L"ru-RU", L"zh-CN"}) {
+        wchar_t saturday[80] = {}, january[80] = {};
+        const bool names = GetLocaleInfoEx(locale, LOCALE_SDAYNAME6, saturday, 80) > 1 &&
+                           GetLocaleInfoEx(locale, LOCALE_SABBREVMONTHNAME1, january, 80) > 1;
+        const std::wstring date = formatDate(locale, 2026, 1, 3);
+        check(names && date.find(L"2026") != std::wstring::npos && date.find(january) != std::wstring::npos &&
+                  date.find(saturday) == std::wstring::npos,
+              "a date names its month without the weekday");
     }
 
     int scanned = 0;

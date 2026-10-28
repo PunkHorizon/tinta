@@ -4,6 +4,7 @@
 
 #include <windows.h>
 #include <string.h>
+#include <algorithm>
 #include <cstring>
 
 // Language metadata. nativeFont is a hint - the chooser uses it so each
@@ -297,13 +298,20 @@ const Entry kEntries[] = {
     { "fm.hidden_preview", L"The property strip is hidden.", L"\u5C5E\u6027\u680F\u5DF2\u9690\u85CF\u3002", L"\u30D7\u30ED\u30D1\u30C6\u30A3\u30D0\u30FC\u306F\u975E\u8868\u793A\u3067\u3059\u3002", L"\uC18D\uC131 \uD45C\uC2DC\uC904\uC774 \uC228\uACA8\uC838 \uC788\uC2B5\uB2C8\uB2E4." },
     { "fm.plain", L"Plain", L"\u666E\u901A", L"\u6A19\u6E96", L"\uC77C\uBC18" },
     { "fm.large", L"Large text", L"\u5927\u53F7\u6587\u5B57", L"\u5927\u304D\u306A\u6587\u5B57", L"\uD070 \uAE00\uC790" },
-    { "fm.absolute", L"Jan 3, 2026", nullptr, nullptr, nullptr },
     { "fm.relative", L"Relative date", L"\u76F8\u5BF9\u65E5\u671F", L"\u76F8\u5BFE\u65E5\u4ED8", L"\uC0C1\uB300 \uB0A0\uC9DC" },
     { "fm.chips", L"Chips", L"\u6807\u7B7E", L"\u30C1\u30C3\u30D7", L"\uCE69" },
     { "fm.hashtags", L"#hashtags", L"#\u8BDD\u9898\u6807\u7B7E", L"#\u30CF\u30C3\u30B7\u30E5\u30BF\u30B0", L"#\uD574\uC2DC\uD0DC\uADF8" },
     { "fm.comma", L"Comma list", L"\u9017\u53F7\u5206\u9694", L"\u30AB\u30F3\u30DE\u533A\u5207\u308A", L"\uC27C\uD45C \uAD6C\uBD84" },
     { "fm.count", L"Count only", L"\u4EC5\u663E\u793A\u6570\u91CF", L"\u4EF6\u6570\u306E\u307F", L"\uAC1C\uC218\uB9CC" },
     { "fm.up_to", L"Show up to", L"\u6700\u591A\u663E\u793A", L"\u6700\u5927\u8868\u793A\u6570", L"\uCD5C\uB300 \uD45C\uC2DC" },
+    { "fm.just_now", L"just now", L"\u521A\u521A", L"\u305F\u3063\u305F\u4ECA", L"\uBC29\uAE08" },
+    { "fm.ago.minutes", L"%d minute ago|%d minutes ago", L"%d \u5206\u949F\u524D", L"%d \u5206\u524D", L"%d\uBD84 \uC804" },
+    { "fm.ago.hours", L"%d hour ago|%d hours ago", L"%d \u5C0F\u65F6\u524D", L"%d \u6642\u9593\u524D", L"%d\uC2DC\uAC04 \uC804" },
+    { "fm.ago.days", L"%d day ago|%d days ago", L"%d \u5929\u524D", L"%d \u65E5\u524D", L"%d\uC77C \uC804" },
+    { "fm.in.minutes", L"in %d minute|in %d minutes", L"%d \u5206\u949F\u540E", L"%d \u5206\u5F8C", L"%d\uBD84 \uD6C4" },
+    { "fm.in.hours", L"in %d hour|in %d hours", L"%d \u5C0F\u65F6\u540E", L"%d \u6642\u9593\u5F8C", L"%d\uC2DC\uAC04 \uD6C4" },
+    { "fm.in.days", L"in %d day|in %d days", L"%d \u5929\u540E", L"%d \u65E5\u5F8C", L"%d\uC77C \uD6C4" },
+    { "fm.items", L"%d item|%d items", L"%d \u9879", L"%d \u4EF6", L"%d\uAC1C" },
     { "settings.editor_assists", L"Markdown assists in the raw editor", L"\u539F\u59CB\u7F16\u8F91\u5668\u7684 Markdown \u8F85\u52A9", L"Raw \u30A8\u30C7\u30A3\u30BF\u306E Markdown \u30A2\u30B7\u30B9\u30C8", L"\uC6D0\uC2DC \uD3B8\uC9D1\uAE30\uC758 \uB9C8\uD06C\uB2E4\uC6B4 \uB3C4\uC6B0\uBBF8" },
     { "settings.editor_assists.hint", L"Lists continue on Enter, Tab indents, Ctrl+B/I wrap", L"\u56DE\u8F66\u7EED\u5199\u5217\u8868\uFF0CTab \u7F29\u8FDB\uFF0CCtrl+B/I \u5305\u88F9", L"Enter \u3067\u30EA\u30B9\u30C8\u7D99\u7D9A\u3001Tab \u3067\u30A4\u30F3\u30C7\u30F3\u30C8\u3001Ctrl+B/I \u3067\u88C5\u98FE", L"Enter\uB85C \uBAA9\uB85D \uACC4\uC18D, Tab \uB4E4\uC5EC\uC4F0\uAE30, Ctrl+B/I \uAC10\uC2F8\uAE30" },
     { "rail.export", L"Export via Pandoc", L"\u901A\u8FC7 Pandoc \u5BFC\u51FA", L"Pandoc \u3067\u30A8\u30AF\u30B9\u30DD\u30FC\u30C8", L"Pandoc\uB85C \uB0B4\uBCF4\uB0B4\uAE30" },
@@ -1898,6 +1906,38 @@ const BuiltinTranslation kBuiltinTranslations[] = {
       L"H\u00F6chstens",
       L"Afficher jusqu'\u00E0",
       L"Mostra fino a" },
+    { "fm.just_now",
+      L"gerade eben",
+      L"\u00E0 l'instant",
+      L"proprio ora" },
+    { "fm.ago.minutes",
+      L"vor %d Minute|vor %d Minuten",
+      L"il y a %d minute|il y a %d minutes",
+      L"%d minuto fa|%d minuti fa" },
+    { "fm.ago.hours",
+      L"vor %d Stunde|vor %d Stunden",
+      L"il y a %d heure|il y a %d heures",
+      L"%d ora fa|%d ore fa" },
+    { "fm.ago.days",
+      L"vor %d Tag|vor %d Tagen",
+      L"il y a %d jour|il y a %d jours",
+      L"%d giorno fa|%d giorni fa" },
+    { "fm.in.minutes",
+      L"in %d Minute|in %d Minuten",
+      L"dans %d minute|dans %d minutes",
+      L"tra %d minuto|tra %d minuti" },
+    { "fm.in.hours",
+      L"in %d Stunde|in %d Stunden",
+      L"dans %d heure|dans %d heures",
+      L"tra %d ora|tra %d ore" },
+    { "fm.in.days",
+      L"in %d Tag|in %d Tagen",
+      L"dans %d jour|dans %d jours",
+      L"tra %d giorno|tra %d giorni" },
+    { "fm.items",
+      L"%d Eintrag|%d Eintr\u00E4ge",
+      L"%d \u00E9l\u00E9ment|%d \u00E9l\u00E9ments",
+      L"%d elemento|%d elementi" },
     { "settings.editor_assists",
       L"Markdown-Hilfen im Quelltext-Editor",
       L"Aides Markdown dans l'\u00E9diteur brut",
@@ -2167,6 +2207,9 @@ void openLanguagesIniFile() {
         f << "; Values override the built-in strings \xe2\x80\x94 including the shipped\n";
         f << "; de/fr/it/ru translations, so corrections work per-key; missing keys\n";
         f << "; fall back to English.\n";
+        f << "; Counts list their plural forms split by |, in the order of the\n";
+        f << "; language's rule (one|other, or one|few|many as in Russian); %d is\n";
+        f << "; the number.\n";
         for (const SeedLanguage& lang : kSeedLanguages) {
             f << "\n[" << lang.id << "]\n";
             f << "name=" << lang.nativeUtf8 << "\n";
@@ -2184,4 +2227,130 @@ void openLanguagesIniFile() {
     }
     ShellExecuteW(nullptr, L"open", configFilePathForShell(path).c_str(),
                   nullptr, nullptr, SW_SHOWNORMAL);
+}
+
+// ---- Counts and dates in the language's own words ----
+
+namespace {
+
+// Which of a count's '|' forms a number takes, by the language's cardinal
+// plural rule
+size_t pluralForm(const std::string& id, long long n) {
+    const std::string language = id.substr(0, id.find('-'));
+    const long long mod10 = n % 10, mod100 = n % 100;
+    const bool few = mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14);
+    if (language == "ru" || language == "uk" || language == "be") {
+        return mod10 == 1 && mod100 != 11 ? 0 : few ? 1 : 2;
+    }
+    if (language == "pl") return n == 1 ? 0 : few ? 1 : 2;
+    if (language == "fr" || language == "pt") return n <= 1 ? 0 : 1;
+    return n == 1 ? 0 : 1;
+}
+
+bool isPictureLetter(wchar_t c) { return c == L'd' || c == L'M' || c == L'y' || c == L'g'; }
+
+} // namespace
+
+std::wstring trCount(int langIndex, const char* key, long long count) {
+    langIndex = clampLanguageIndex(langIndex);
+    const std::wstring text = tr(langIndex, key);
+    // Text that fell back to English takes English's rule
+    const size_t form = pluralForm(languageTranslatesKey(langIndex, key) ? languageIdAt(langIndex) : "en", count);
+    size_t start = 0;
+    for (size_t i = 0; i < form; ++i) {
+        const size_t bar = text.find(L'|', start);
+        if (bar == std::wstring::npos) break;  // fewer forms: the last one
+        start = bar + 1;
+    }
+    std::wstring out = text.substr(start, text.find(L'|', start) - start);
+    const size_t number = out.find(L"%d");
+    if (number != std::wstring::npos) out.replace(number, 2, std::to_wstring(count));
+    return out;
+}
+
+std::wstring dateLocaleFor(const std::string& languageId, const std::wstring& userLocale) {
+    const std::wstring id(languageId.begin(), languageId.end());
+    // A language with a region of its own (zh-tw) keeps it
+    const std::wstring userLanguage = userLocale.substr(0, userLocale.find(L'-'));
+    if (id.find(L'-') == std::wstring::npos && !userLanguage.empty() &&
+        _wcsicmp(userLanguage.c_str(), id.c_str()) == 0) {
+        return userLocale;
+    }
+    wchar_t resolved[LOCALE_NAME_MAX_LENGTH] = {};
+    if (ResolveLocaleName(id.c_str(), resolved, LOCALE_NAME_MAX_LENGTH) > 0 && resolved[0]) {
+        return resolved;
+    }
+    return L"en-US";
+}
+
+std::wstring dateLocale(int langIndex) {
+    wchar_t user[LOCALE_NAME_MAX_LENGTH] = {};
+    if (!GetUserDefaultLocaleName(user, LOCALE_NAME_MAX_LENGTH)) user[0] = 0;
+    return dateLocaleFor(languageIdAt(clampLanguageIndex(langIndex)), user);
+}
+
+std::wstring shortDatePicture(const std::wstring& picture) {
+    // Fields (runs of one picture letter), quoted text, and the plain
+    // separators between them
+    enum Kind { Field, Quoted, Plain };
+    struct Part { Kind kind; std::wstring text; };
+    std::vector<Part> parts;
+    for (size_t i = 0; i < picture.size();) {
+        size_t end = i + 1;
+        Kind kind = Plain;
+        if (picture[i] == L'\'') {
+            kind = Quoted;
+            // '' inside quotes is a quote character
+            while (end < picture.size() &&
+                   (picture[end] != L'\'' || (end + 1 < picture.size() && picture[end + 1] == L'\''))) {
+                end += picture[end] == L'\'' ? 2 : 1;
+            }
+            end = std::min(end + 1, picture.size());
+        } else if (isPictureLetter(picture[i])) {
+            kind = Field;
+            while (end < picture.size() && picture[end] == picture[i]) ++end;
+        } else {
+            while (end < picture.size() && picture[end] != L'\'' && !isPictureLetter(picture[end])) ++end;
+        }
+        parts.push_back({kind, picture.substr(i, end - i)});
+        i = end;
+    }
+    // The weekday goes with the separator that joined it to the date: the
+    // one after it when it leads, else the one before it
+    for (size_t i = 0; i < parts.size();) {
+        if (parts[i].kind != Field || parts[i].text[0] != L'd' || parts[i].text.size() < 3) {
+            ++i;
+            continue;
+        }
+        if (i == 0 && parts.size() > 1 && parts[1].kind == Plain) {
+            parts.erase(parts.begin() + 1);
+        } else if (i > 0 && parts[i - 1].kind == Plain) {
+            parts.erase(parts.begin() + --i);
+        }
+        parts.erase(parts.begin() + i);
+    }
+    std::wstring out;
+    for (const Part& part : parts) {
+        if (part.kind == Field && part.text == L"MMMM") out += L"MMM";
+        else if (part.kind == Field && part.text == L"dd") out += L"d";
+        else out += part.text;
+    }
+    return out;
+}
+
+std::wstring formatDate(const std::wstring& locale, int year, int month, int day, bool withYear) {
+    SYSTEMTIME date = {};
+    date.wYear = (WORD)year;
+    date.wMonth = (WORD)month;
+    date.wDay = (WORD)day;
+    wchar_t picture[128] = {};
+    wchar_t out[128] = {};
+    if (GetLocaleInfoEx(locale.c_str(), withYear ? LOCALE_SLONGDATE : LOCALE_SMONTHDAY, picture, 128) > 0 &&
+        GetDateFormatEx(locale.c_str(), 0, &date, shortDatePicture(picture).c_str(), out, 128, nullptr) > 0) {
+        return out;
+    }
+    if (GetDateFormatEx(L"en-US", 0, &date, withYear ? L"MMM d, yyyy" : L"MMM d", out, 128, nullptr) > 0) {
+        return out;
+    }
+    return L"";
 }
