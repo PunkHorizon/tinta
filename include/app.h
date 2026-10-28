@@ -196,6 +196,9 @@ int saveCustomTheme(const D2DTheme& t, const std::wstring& name,
 
 // Persistent settings
 enum class SidePanel { None, Contents, Browser };
+// The side panels' scrolling lists (#287): the Contents outline, the file
+// browser, the search results
+enum class PanelList { None, Contents, Browser, Search };
 
 struct Settings {
     int themeIndex = 5;          // Default to Midnight
@@ -874,6 +877,12 @@ struct App {
         float startX = 0, startWidth = 0;
         float oldTocWidth = 0, oldBrowserWidth = 0;
     } panelResize;
+    // A drag on a side panel list's scrollbar (#287); grab is the
+    // pointer's offset into the thumb
+    struct PanelScrollbarDrag {
+        PanelList list = PanelList::None;
+        float grab = 0;
+    } panelScrollbarDrag;
     float tocAnimation = 0.0f;  // 0 to 1 slide-in from the chosen side
     // A clicked heading stays the active row even when the scroll cannot
     // reach it (short documents); any real scroll hands back to the spy

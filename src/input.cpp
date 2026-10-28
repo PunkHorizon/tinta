@@ -982,15 +982,10 @@ void handleMouseWheel(App& app, HWND hwnd, WPARAM wParam, LPARAM) {
         float panelWidth = folderBrowserPanelWidth(app);
         float panelX = -panelWidth * (1.0f - app.folderBrowserAnimation);
         if (app.mouseX >= panelX && app.mouseX <= panelX + panelWidth) {
-            // Scroll folder list
-            app.folderBrowserScroll -= delta * dpi(app, 60.0f);
-            float itemHeight = dpi(app, 28.0f);
-            float headerHeight = dpi(app, 48.0f);
-            float listHeight = app.height - headerHeight - dpi(app, 20.0f);
-            float totalItemsHeight = app.folderItems.size() * itemHeight +
-                (app.folderBrowserNaming != 0 ? itemHeight : 0.0f);
-            float maxScroll = std::max(0.0f, totalItemsHeight - listHeight);
-            app.folderBrowserScroll = std::max(0.0f, std::min(app.folderBrowserScroll, maxScroll));
+            // Scroll folder list, as far as the card draws it: older
+            // row sizes stopped short of the last rows in short folders
+            app.folderBrowserScroll = std::clamp(app.folderBrowserScroll - delta * dpi(app, 60.0f),
+                                                 0.0f, folderBrowserMaxScroll(app));
             InvalidateRect(hwnd, nullptr, FALSE);
             return;
         }
@@ -1055,31 +1050,28 @@ static bool moveDocumentScrollbarDrag(App& app, HWND hwnd) {
     // Mouse capture owns this gesture across panels, title bars and window
     // edges. Hover routing must never intercept movement during the drag.
     SetCursor(cursorArrow);
+    // The thumb moves with the pointer along the track as drawn: below the
+    // tab strip, short of the other bar (#287)
     if (app.scrollbarDragging) {
-        const float maxScroll = std::max(0.0f, app.contentHeight - app.height);
-        if (maxScroll > 0 && app.contentHeight > app.height) {
-            const float sbHeight = std::max((float)app.height / app.contentHeight * app.height, 30.0f);
-            const float trackHeight = app.height - sbHeight;
-            if (trackHeight > 0) {
-                const float deltaY = (float)app.mouseY - app.scrollbarDragStartY;
-                app.scrollY = std::clamp(app.scrollbarDragStartScroll + deltaY / trackHeight * maxScroll, 0.0f, maxScroll);
-                app.targetScrollY = app.scrollY;
-                // Beside the editor the preview follows the editor each
-                // frame, so the editor goes where the thumb is taken (#280)
-                if (app.editMode) editorFollowPreview(app);
-            }
+        const ScrollbarGeometry bar = documentScrollbarV(app);
+        const float travel = bar.trackLength - bar.thumbLength;
+        if (bar.maxScroll > 0 && travel > 0) {
+            const float deltaY = (float)app.mouseY - app.scrollbarDragStartY;
+            app.scrollY = std::clamp(app.scrollbarDragStartScroll + deltaY / travel * bar.maxScroll,
+                                     0.0f, bar.maxScroll);
+            app.targetScrollY = app.scrollY;
+            // Beside the editor the preview follows the editor each
+            // frame, so the editor goes where the thumb is taken (#280)
+            if (app.editMode) editorFollowPreview(app);
         }
     } else {
-        const float viewportWidth = documentViewportWidth(app);
-        const float maxScroll = std::max(0.0f, app.contentWidth - viewportWidth);
-        if (maxScroll > 0 && app.contentWidth > viewportWidth) {
-            const float sbWidth = std::max(viewportWidth / app.contentWidth * viewportWidth, 30.0f);
-            const float trackWidth = viewportWidth - sbWidth;
-            if (trackWidth > 0) {
-                const float deltaX = (float)app.mouseX - app.hScrollbarDragStartX;
-                app.scrollX = std::clamp(app.hScrollbarDragStartScroll + deltaX / trackWidth * maxScroll, 0.0f, maxScroll);
-                app.targetScrollX = app.scrollX;
-            }
+        const ScrollbarGeometry bar = documentScrollbarH(app);
+        const float travel = bar.trackLength - bar.thumbLength;
+        if (bar.maxScroll > 0 && travel > 0) {
+            const float deltaX = (float)app.mouseX - app.hScrollbarDragStartX;
+            app.scrollX = std::clamp(app.hScrollbarDragStartScroll + deltaX / travel * bar.maxScroll,
+                                     0.0f, bar.maxScroll);
+            app.targetScrollX = app.scrollX;
         }
     }
     InvalidateRect(hwnd, nullptr, FALSE);
@@ -1152,6 +1144,10 @@ void handleMouseMove(App& app, HWND hwnd, LPARAM lParam) {
     }
 
     if (moveDocumentScrollbarDrag(app, hwnd)) return;
+    if (panelScrollbarMove(app, static_cast<float>(app.mouseY))) {
+        SetCursor(cursorArrow);
+        return;
+    }
 
     bool iconHover = appMenuButtonAt(app, (float)app.mouseX, (float)app.mouseY);
     if (iconHover != app.appMenuHover) {
@@ -1332,6 +1328,15 @@ void handleMouseMove(App& app, HWND hwnd, LPARAM lParam) {
     }
     if (app.showHelp) {
         SetCursor(cursorArrow);
+        return;
+    }
+
+    // A side panel list's scrollbar: an arrow, not a row's hand (#287),
+    // and its thumb lights up
+    if (panelScrollbarAt(app, static_cast<float>(app.mouseX), static_cast<float>(app.mouseY)) !=
+        PanelList::None) {
+        SetCursor(cursorArrow);
+        if (mouseMoved) InvalidateRect(hwnd, nullptr, FALSE);
         return;
     }
 
@@ -2080,6 +2085,10 @@ void handleMouseDown(App& app, HWND hwnd, WPARAM, LPARAM lParam) {
     // The chooser acts on release; do not place an editor caret under it.
     if (app.showThemeChooser) return;
 
+    // A side panel list's scrollbar drags like the document's (#287)
+    if (panelScrollbarBegin(app, hwnd, static_cast<float>(GET_X_LPARAM(lParam)),
+                            static_cast<float>(GET_Y_LPARAM(lParam)))) return;
+
     // The search bar's results button and the results panel (#246)
     if (searchPanelMouseDown(app, hwnd, static_cast<float>(GET_X_LPARAM(lParam)),
                              static_cast<float>(GET_Y_LPARAM(lParam)))) return;
@@ -2251,18 +2260,10 @@ void handleMouseDown(App& app, HWND hwnd, WPARAM, LPARAM lParam) {
         app.scrollbarDragStartY = (float)app.mouseY;
         app.scrollbarDragStartScroll = app.scrollY;
 
-        // Check if clicking in track (not thumb) - jump to position
-        float maxScroll = std::max(0.0f, app.contentHeight - app.height);
-        float sbHeight = (float)app.height / app.contentHeight * app.height;
-        sbHeight = std::max(sbHeight, 30.0f);
-        float sbY = (maxScroll > 0) ? (app.scrollY / maxScroll * (app.height - sbHeight)) : 0;
-
-        // If clicked outside thumb, jump
-        if (app.mouseY < sbY || app.mouseY > sbY + sbHeight) {
-            float trackHeight = app.height - sbHeight;
-            float clickPos = (float)app.mouseY - sbHeight / 2;
-            clickPos = std::max(0.0f, std::min(clickPos, trackHeight));
-            app.scrollY = (clickPos / trackHeight) * maxScroll;
+        // A click on the track, off the thumb, centres the thumb there
+        const ScrollbarGeometry bar = documentScrollbarV(app);
+        if (app.mouseY < bar.thumbStart || app.mouseY > bar.thumbStart + bar.thumbLength) {
+            app.scrollY = bar.scrollForThumb((float)app.mouseY - bar.thumbLength / 2);
             app.targetScrollY = app.scrollY;
             app.scrollbarDragStartScroll = app.scrollY;
             app.scrollbarDragStartY = (float)app.mouseY;
@@ -2277,23 +2278,10 @@ void handleMouseDown(App& app, HWND hwnd, WPARAM, LPARAM lParam) {
         app.hScrollbarDragStartX = (float)app.mouseX;
         app.hScrollbarDragStartScroll = app.scrollX;
 
-        // Check if clicking in track (not thumb) - jump to position
-        float viewportX = documentViewportX(app);
-        float viewportWidth = documentViewportWidth(app);
-        float localMouseX = app.mouseX - viewportX;
-        float maxScroll = std::max(0.0f, app.contentWidth - viewportWidth);
-        float sbWidth = viewportWidth / app.contentWidth * viewportWidth;
-        sbWidth = std::max(sbWidth, 30.0f);
-        float sbX = (maxScroll > 0)
-            ? (app.scrollX / maxScroll * (viewportWidth - sbWidth))
-            : 0;
-
-        // If clicked outside thumb, jump
-        if (localMouseX < sbX || localMouseX > sbX + sbWidth) {
-            float trackWidth = viewportWidth - sbWidth;
-            float clickPos = localMouseX - sbWidth / 2;
-            clickPos = std::max(0.0f, std::min(clickPos, trackWidth));
-            app.scrollX = (clickPos / trackWidth) * maxScroll;
+        // A click on the track, off the thumb, centres the thumb there
+        const ScrollbarGeometry bar = documentScrollbarH(app);
+        if (app.mouseX < bar.thumbStart || app.mouseX > bar.thumbStart + bar.thumbLength) {
+            app.scrollX = bar.scrollForThumb((float)app.mouseX - bar.thumbLength / 2);
             app.targetScrollX = app.scrollX;
             app.hScrollbarDragStartScroll = app.scrollX;
             app.hScrollbarDragStartX = (float)app.mouseX;
@@ -2831,6 +2819,11 @@ void handleMouseUp(App& app, HWND hwnd, WPARAM, LPARAM lParam) {
         moveDocumentScrollbarDrag(app, hwnd);
         endDocumentScrollbarDrag(app, hwnd, false);
         return;  // releasing over a panel must not activate its controls
+    }
+    if (app.panelScrollbarDrag.list != PanelList::None) {
+        panelScrollbarMove(app, static_cast<float>(GET_Y_LPARAM(lParam)));
+        panelScrollbarEnd(app, hwnd, false);
+        return;  // the release must not open a row or close the panel
     }
     if (app.panelResize.panel != SidePanel::None) {
         sidePanelResizeMove(app, static_cast<float>(GET_X_LPARAM(lParam)));
@@ -3553,6 +3546,10 @@ bool handleKeyDown(App& app, HWND hwnd, WPARAM wParam) {
     }
     if (app.panelResize.panel != SidePanel::None) {
         if (wParam == VK_ESCAPE) sidePanelResizeEnd(app, hwnd, true);
+        return true;
+    }
+    if (app.panelScrollbarDrag.list != PanelList::None) {
+        if (wParam == VK_ESCAPE) panelScrollbarEnd(app, hwnd, true);
         return true;
     }
     float pageSize = app.height * 0.8f;
