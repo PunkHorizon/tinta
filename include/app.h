@@ -48,6 +48,8 @@ inline int64_t usElapsed(Clock::time_point start) {
 #define TIMER_UPDATE_CHECK 10
 #define TIMER_SIDE_PANEL_SCROLLBARS 12
 #define TIMER_TAB_HOVER_CARD 13
+#define TIMER_TOUCH_HOLD 14
+#define TIMER_TOUCH_FLING 15
 
 // Posted to continue an incomplete document layout in time-budgeted chunks
 #define WM_APP_LAYOUT_CHUNK (WM_APP + 1)
@@ -199,6 +201,9 @@ enum class SidePanel { None, Contents, Browser };
 // The side panels' scrolling lists (#287): the Contents outline, the file
 // browser, the search results
 enum class PanelList { None, Contents, Browser, Search };
+// What a finger drives (#286): the page (the reader or the docked
+// preview), the editor's text, or a side panel's list
+enum class TouchTarget { None, Document, Editor, List };
 
 struct Settings {
     int themeIndex = 5;          // Default to Midnight
@@ -883,6 +888,37 @@ struct App {
         PanelList list = PanelList::None;
         float grab = 0;
     } panelScrollbarDrag;
+    // Touch (#286): the finger in charge of a gesture and what it drives.
+    // Further fingers are taken and ignored, and stop a tap or a hold. A
+    // pan sets the position it began at less the finger's travel, so the
+    // preview's line sync cannot eat slow pans; a fling carries its own.
+    struct TouchGesture {
+        enum Phase { Idle, Pending, Panning, Holding };
+        Phase phase = Idle;
+        bool active = false;  // a finger is in charge
+        UINT32 pointer = 0;
+        std::vector<UINT32> extra;
+        bool multi = false;  // another finger came down
+        TouchTarget target = TouchTarget::None;
+        PanelList list = PanelList::None;
+        POINT start{}, last{};
+        int axis = 0;  // while panning: 1 vertical, 2 horizontal
+        float originX = 0, originY = 0;
+        struct Sample { double ms; float x, y; };
+        std::vector<Sample> samples;  // recent positions, for a flick's speed
+        // The last tap, so a second one nearby is a double tap
+        POINT tapPoint{};
+        double tapMs = 0;
+        TouchTarget tapTarget = TouchTarget::None;
+        bool flinging = false;
+        TouchTarget flingTarget = TouchTarget::None;
+        PanelList flingList = PanelList::None;
+        float flingX = 0, flingY = 0;    // where the fling has got to
+        float flingVX = 0, flingVY = 0;  // pixels per ms, as the finger went
+        double flingMs = 0;
+        int flingTab = -1;
+        std::string flingFile;
+    } touch;
     float tocAnimation = 0.0f;  // 0 to 1 slide-in from the chosen side
     // A clicked heading stays the active row even when the scroll cannot
     // reach it (short documents); any real scroll hands back to the spy

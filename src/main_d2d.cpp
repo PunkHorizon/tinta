@@ -41,6 +41,7 @@
 #include <thread>
 #pragma comment(lib, "winhttp.lib")
 #include "input.h"
+#include "touch.h"
 #include "editor.h"
 #include "print.h"
 #include "export.h"
@@ -1447,10 +1448,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         }
 
         case WM_MOUSEWHEEL:
+            if (app) touchStopFling(*app, hwnd);
             if (app) handleMouseWheel(*app, hwnd, wParam, lParam);
             return 0;
 
         case WM_MOUSEHWHEEL:
+            if (app) touchStopFling(*app, hwnd);
             if (app) handleMouseHWheel(*app, hwnd, wParam, lParam);
             return 0;
 
@@ -1459,8 +1462,18 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             return 0;
 
         case WM_LBUTTONDOWN:
+            if (app) touchStopFling(*app, hwnd);
             if (app) handleMouseDown(*app, hwnd, wParam, lParam);
             return 0;
+
+        case WM_POINTERDOWN:
+        case WM_POINTERUPDATE:
+        case WM_POINTERUP:
+        case WM_POINTERCAPTURECHANGED:
+            // A finger pans, taps and holds here (#286); the pen, and the
+            // touches left to them, go on to Windows' mouse emulation
+            if (app && handlePointerMessage(*app, hwnd, msg, wParam, lParam)) return 0;
+            break;
 
         case WM_LBUTTONUP:
             if (app) handleMouseUp(*app, hwnd, wParam, lParam);
@@ -1543,6 +1556,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             break;
 
         case WM_KEYDOWN:
+            if (app) touchStopFling(*app, hwnd);
             if (app) return handleKeyDown(*app, hwnd, wParam) ? 1 : 0;
             return 0;
 
@@ -1643,6 +1657,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             if (wParam == TIMER_SELECT_SCROLL && app) {
                 handleSelectScrollTimer(*app, hwnd);
             }
+            if (wParam == TIMER_TOUCH_HOLD && app) touchHold(*app, hwnd);
+            if (wParam == TIMER_TOUCH_FLING && app) touchFlingStep(*app, hwnd, touchClockMs());
             if (wParam == TIMER_IMAGE_REFLOW && app) {
                 // One relayout for however many images arrived since armed
                 KillTimer(hwnd, TIMER_IMAGE_REFLOW);
