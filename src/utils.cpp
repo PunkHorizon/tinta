@@ -221,7 +221,20 @@ void handleLinkClick(App& app) {
     }
 }
 
-bool copyToClipboard(HWND hwnd, const std::wstring& text) {
+bool openClipboard(HWND hwnd, bool* held) {
+    for (int attempt = 0; attempt < 10; ++attempt) {
+        if (OpenClipboard(hwnd)) return true;
+        Sleep(5);
+    }
+    if (held) *held = true;
+    return false;
+}
+
+void signalClipboardBusy(App& app) {
+    signalPushKey(app, SIG_WARN, SIGI_WARNING, "toast.clipboard_busy");
+}
+
+bool copyToClipboard(HWND hwnd, const std::wstring& text, bool* held) {
     if (text.empty()) return false;
     size_t size = (text.length() + 1) * sizeof(wchar_t);
     HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, size);
@@ -233,7 +246,7 @@ bool copyToClipboard(HWND hwnd, const std::wstring& text) {
     }
     memcpy(dest, text.c_str(), size);
     GlobalUnlock(hMem);
-    if (!OpenClipboard(hwnd)) {
+    if (!openClipboard(hwnd, held)) {
         GlobalFree(hMem);
         return false;
     }
@@ -328,7 +341,7 @@ std::string clipboardHtml(const std::wstring& htmlFragment) {
 }
 
 bool copyRichTextToClipboard(HWND hwnd, const std::wstring& text,
-                             const std::wstring& htmlFragment) {
+                             const std::wstring& htmlFragment, bool* held) {
     if (text.empty()) return false;
     static const UINT htmlFormat = RegisterClipboardFormatW(L"HTML Format");
     std::string html = clipboardHtml(htmlFragment);
@@ -344,7 +357,7 @@ bool copyRichTextToClipboard(HWND hwnd, const std::wstring& text,
     HGLOBAL textMem = globalCopy(text.c_str(), (text.size() + 1) * sizeof(wchar_t));
     if (!textMem) return false;
     HGLOBAL htmlMem = htmlFormat ? globalCopy(html.c_str(), html.size() + 1) : nullptr;
-    if (!OpenClipboard(hwnd)) {
+    if (!openClipboard(hwnd, held)) {
         GlobalFree(textMem);
         if (htmlMem) GlobalFree(htmlMem);
         return false;
@@ -381,8 +394,11 @@ std::wstring absoluteFilePath(const std::string& path) {
 }
 
 void copyFilePath(App& app, HWND hwnd, const std::string& path) {
-    if (copyToClipboard(hwnd, absoluteFilePath(path)))
+    bool held = false;
+    if (copyToClipboard(hwnd, absoluteFilePath(path), &held))
         signalPushKey(app, SIG_INFO, SIGI_COPY, "toast.copied");
+    else if (held)
+        signalClipboardBusy(app);
 }
 
 void extractText(const ElementPtr& elem, std::wstring& out) {

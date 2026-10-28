@@ -163,6 +163,7 @@ const Entry kEntries[] = {
     { "toast.wrap_on",         L"Word wrap on (Ctrl+W to turn off)",        L"\u5DF2\u5F00\u542F\u81EA\u52A8\u6362\u884C\uFF08Ctrl+W \u5173\u95ED\uFF09", L"\u81EA\u52D5\u6539\u884C\u3092\u30AA\u30F3\u306B\u3057\u307E\u3057\u305F (Ctrl+W\u3067\u30AA\u30D5)", L"\uC790\uB3D9 \uC904\uBC14\uAFC0 \uCF1C\uAE30 (Ctrl+W\uB85C \uB044\uAE30)" },
     { "toast.wrap_off",        L"Word wrap off (Ctrl+W to turn on)",        L"\u5DF2\u5173\u95ED\u81EA\u52A8\u6362\u884C\uFF08Ctrl+W \u5F00\u542F\uFF09", L"\u81EA\u52D5\u6539\u884C\u3092\u30AA\u30D5\u306B\u3057\u307E\u3057\u305F (Ctrl+W\u3067\u30AA\u30F3)", L"\uC790\uB3D9 \uC904\uBC14\uAFC0 \uB044\uAE30 (Ctrl+W\uB85C \uCF1C\uAE30)" },
     { "toast.copied",          L"Copied!",                                  L"\u5DF2\u590D\u5236\uFF01",                             L"\u30B3\u30D4\u30FC\u3057\u307E\u3057\u305F\uFF01",             L"\uBCF5\uC0AC\uD588\uC2B5\uB2C8\uB2E4!" },
+    { "toast.clipboard_busy", L"Clipboard busy \u2014 nothing copied", L"\u526A\u8D34\u677F\u88AB\u5360\u7528\uFF0C\u672A\u590D\u5236", L"\u30AF\u30EA\u30C3\u30D7\u30DC\u30FC\u30C9\u4F7F\u7528\u4E2D\uFF1A\u30B3\u30D4\u30FC\u3055\u308C\u307E\u305B\u3093\u3067\u3057\u305F", L"\uD074\uB9BD\uBCF4\uB4DC \uC0AC\uC6A9 \uC911 \u2014 \uBCF5\uC0AC\uB418\uC9C0 \uC54A\uC74C" },
     { "toast.paste_table",     L"Pasted as a table \u00B7 Ctrl+Shift+V pastes plain", L"\u5DF2\u7C98\u8D34\u4E3A\u8868\u683C\uFF08Ctrl+Shift+V \u7C98\u8D34\u7EAF\u6587\u672C\uFF09", L"\u8868\u3068\u3057\u3066\u8CBC\u308A\u4ED8\u3051\u307E\u3057\u305F (Ctrl+Shift+V\u3067\u305D\u306E\u307E\u307E)", L"\uD45C\uB85C \uBD99\uC5EC\uB123\uC5C8\uC2B5\uB2C8\uB2E4 (Ctrl+Shift+V\uB294 \uC77C\uBC18 \uBD99\uC5EC\uB123\uAE30)" },
 
     // Code block hover button + confirmation pill
@@ -869,6 +870,10 @@ const BuiltinTranslation kBuiltinTranslations[] = {
       L"Kopiert!",
       L"Copi\u00E9 !",
       L"Copiato!" },
+    { "toast.clipboard_busy",
+      L"Zwischenablage belegt \u2014 nichts kopiert",
+      L"Presse-papiers occup\u00E9 \u2014 rien n'a \u00E9t\u00E9 copi\u00E9",
+      L"Appunti occupati \u2014 nulla \u00E8 stato copiato" },
     { "toast.paste_table",
       L"Als Tabelle eingef\u00FCgt (Ctrl+Shift+V f\u00FCgt unver\u00E4ndert ein)",
       L"Coll\u00E9 en tableau (Ctrl+Shift+V colle le texte brut)",

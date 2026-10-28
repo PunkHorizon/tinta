@@ -282,10 +282,10 @@ std::wstring selectionHtmlForRange(const App& app, size_t start, size_t end) {
     return html;
 }
 
-bool copySelectionRange(const App& app, HWND hwnd, size_t start, size_t end) {
+bool copySelectionRange(const App& app, HWND hwnd, size_t start, size_t end, bool* held) {
     std::wstring text = selectionTextForRange(app, start, end);
     if (text.empty()) return false;
-    return copyRichTextToClipboard(hwnd, text, selectionHtmlForRange(app, start, end));
+    return copyRichTextToClipboard(hwnd, text, selectionHtmlForRange(app, start, end), held);
 }
 
 void clearSelection(App& app) {

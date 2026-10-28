@@ -377,9 +377,7 @@ static void closeFolderBrowserInput(App& app) {
 // Single-line clipboard text: newlines and tabs become spaces
 std::wstring clipboardLine(HWND hwnd) {
     // Clipboard listeners can briefly own it just after a copy/cut.
-    bool opened = false;
-    for (int attempt = 0; attempt < 10 && !(opened = OpenClipboard(hwnd) != FALSE); ++attempt) Sleep(5);
-    if (!opened) return {};
+    if (!openClipboard(hwnd)) return {};
     std::wstring text;
     if (HANDLE hData = GetClipboardData(CF_UNICODETEXT)) {
         if (wchar_t* ptr = (wchar_t*)GlobalLock(hData)) {
@@ -1704,9 +1702,13 @@ static void invokeContextMenuAction(App& app, HWND hwnd, int item) {
     switch (item) {
         case CTX_COPY:
             if (app.hasSelection && app.selAnchor != app.selFocus) {
+                bool held = false;
                 if (!copySelectionRange(app, hwnd,
                                         std::min(app.selAnchor, app.selFocus),
-                                        std::max(app.selAnchor, app.selFocus))) break;
+                                        std::max(app.selAnchor, app.selFocus), &held)) {
+                    if (held) signalClipboardBusy(app);
+                    break;
+                }
                 app.hasSelection = false;
                 signalPushKey(app, SIG_INFO, SIGI_COPY, "toast.copied");
             }
@@ -3358,15 +3360,18 @@ void handleMouseUp(App& app, HWND hwnd, WPARAM, LPARAM lParam) {
         // Releasing anywhere else on a code block must NOT consume the
         // mouse-up: a drag selection ending on the block would never
         // finalize, stay "selecting", and follow the next mouse move
+        bool held = false;
         if (copyToClipboard(
-                hwnd, codeCopyText(app.codeBlocks[app.hoveredCodeBlock].codeText))) {
+                hwnd, codeCopyText(app.codeBlocks[app.hoveredCodeBlock].codeText), &held)) {
             // The Copied pill keeps its code-block anchor (t13). An empty
-            // block, or a clipboard held by another program, copies
-            // nothing and claims nothing.
+            // block copies nothing and claims nothing; a clipboard held by
+            // another program gets its warning.
             D2D1_RECT_F anchor = app.codeBlocks[app.hoveredCodeBlock].bounds;
             signalPush(app, SIG_SUCCESS, SIGI_CHECK,
                        tr(app, "codeblock.copied"), L"", L"", SIGA_NONE,
                        SIGC_NONE, true, &anchor);
+        } else if (held) {
+            signalClipboardBusy(app);
         }
         app.hoveredCodeBlock = -1;
         app.selecting = false;
@@ -3379,25 +3384,27 @@ void handleMouseUp(App& app, HWND hwnd, WPARAM, LPARAM lParam) {
         // Diagram image button: 2x raster to the clipboard. A rendered
         // PlantUML diagram already has a cached PNG - copy that instead of
         // rebuilding mermaid prims; success shows the same toast as
-        // mermaid, a miss or failure stays silent.
+        // mermaid, a miss or a render failure stays silent, and a clipboard
+        // held by another program gets its warning.
         const App::CodeBlockInfo& block =
             app.codeBlocks[app.hoveredCodeBlock];
+        bool copied = false, held = false;
         if (block.isPlantuml) {
             auto hit = app.plantumlQueue
                            ? app.plantumlQueue->lookup(block.plantumlKey)
                            : nullptr;
-            if (hit && hit->ok &&
-                copyPlantumlImageToClipboard(app, hit->filePath)) {
-                D2D1_RECT_F anchor = block.bounds;
-                signalPush(app, SIG_SUCCESS, SIGI_CHECK,
-                           tr(app, "diagram.copied"), L"", L"", SIGA_NONE,
-                           SIGC_NONE, true, &anchor);
-            }
-        } else if (copyDiagramImage(app, hwnd, toUtf8(block.codeText))) {
+            copied = hit && hit->ok &&
+                     copyPlantumlImageToClipboard(app, hit->filePath, &held);
+        } else {
+            copied = copyDiagramImage(app, hwnd, toUtf8(block.codeText), &held);
+        }
+        if (copied) {
             D2D1_RECT_F anchor = block.bounds;
             signalPush(app, SIG_SUCCESS, SIGI_CHECK,
                        tr(app, "diagram.copied"), L"", L"", SIGA_NONE,
                        SIGC_NONE, true, &anchor);
+        } else if (held) {
+            signalClipboardBusy(app);
         }
         app.hoveredCodeBlock = -1;
         app.selecting = false;
@@ -3408,13 +3415,15 @@ void handleMouseUp(App& app, HWND hwnd, WPARAM, LPARAM lParam) {
         app.selecting = false;
     } else if (tableCopyButtonAt(app, app.mouseX, app.mouseY)) {
         // Table copy button: cells joined by tabs paste into a
-        // spreadsheet as a grid
-        copyToClipboard(hwnd, app.tableRects[app.hoveredTable].tsv);
-        {
+        // spreadsheet as a grid. "Table copied" only when it was.
+        bool held = false;
+        if (copyToClipboard(hwnd, app.tableRects[app.hoveredTable].tsv, &held)) {
             D2D1_RECT_F anchor = app.tableRects[app.hoveredTable].bounds;
             signalPush(app, SIG_SUCCESS, SIGI_CHECK,
                        tr(app, "table.copied"), L"", L"", SIGA_NONE,
                        SIGC_NONE, true, &anchor);
+        } else if (held) {
+            signalClipboardBusy(app);
         }
         app.hoveredTable = -1;
         app.selecting = false;
@@ -3828,9 +3837,13 @@ bool handleKeyDown(App& app, HWND hwnd, WPARAM wParam) {
         if (tableEditKeyDown(app, hwnd, wParam)) return false;
         if (ctrl && wParam == 'C' && app.hasSelection &&
             app.selAnchor != app.selFocus) {
+            bool held = false;
             if (!copySelectionRange(app, hwnd,
                                     std::min(app.selAnchor, app.selFocus),
-                                    std::max(app.selAnchor, app.selFocus))) return false;
+                                    std::max(app.selAnchor, app.selFocus), &held)) {
+                if (held) signalClipboardBusy(app);
+                return false;
+            }
             signalPushKey(app, SIG_INFO, SIGI_COPY, "toast.copied");
             app.hasSelection = false;
             InvalidateRect(hwnd, nullptr, FALSE);
@@ -3938,24 +3951,26 @@ bool handleKeyDown(App& app, HWND hwnd, WPARAM wParam) {
             }
             case 'C': {
                 // Copy - copy selected text or all text if select all was used
-                bool copied = false;
+                bool copied = false, held = false;
                 if (app.hasSelection && app.selAnchor != app.selFocus) {
                     copied = copySelectionRange(
                         app, hwnd, std::min(app.selAnchor, app.selFocus),
-                        std::max(app.selAnchor, app.selFocus));
-                    app.hasSelection = false;
+                        std::max(app.selAnchor, app.selFocus), &held);
+                    // A copy the clipboard refused keeps its selection
+                    if (copied) app.hasSelection = false;
                 } else if (app.root) {
                     // If no selection, copy all
                     std::wstring allText;
                     extractText(app.root, allText);
-                    copyToClipboard(hwnd, allText);
-                    copied = true;
+                    copied = copyToClipboard(hwnd, allText, &held);
                 }
-                // Show "Copied!" notification
+                // "Copied!" only for what reached the clipboard
                 if (copied) {
                     signalPushKey(app, SIG_INFO, SIGI_COPY, "toast.copied");
-                    InvalidateRect(hwnd, nullptr, FALSE);
+                } else if (held) {
+                    signalClipboardBusy(app);
                 }
+                InvalidateRect(hwnd, nullptr, FALSE);
                 break;
             }
             case VK_OEM_COMMA:

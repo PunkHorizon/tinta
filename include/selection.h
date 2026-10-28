@@ -46,8 +46,10 @@ std::wstring selectionTextForRange(const App& app, size_t start, size_t end);
 // keeps them.
 std::wstring selectionHtmlForRange(const App& app, size_t start, size_t end);
 
-// Copies [start, end) as plain text plus its HTML; false when empty.
-bool copySelectionRange(const App& app, HWND hwnd, size_t start, size_t end);
+// Copies [start, end) as plain text plus its HTML; false when empty, or
+// when the clipboard stayed held (then held is set).
+bool copySelectionRange(const App& app, HWND hwnd, size_t start, size_t end,
+                        bool* held = nullptr);
 
 void clearSelection(App& app);
 

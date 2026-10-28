@@ -125,7 +125,7 @@ int main() {
         check(std::wstring(tr(ru, entry.key)) == entry.text, "Russian translation lookup resolves the built-in text");
         check(formats(tr(en, entry.key)) == formats(entry.text), "Russian preserves printf arguments and order");
     }
-    check(russianKeys.size() == 360, "Russian covers every current interface key");
+    check(russianKeys.size() == 361, "Russian covers every current interface key");
     // Every shipped language has its own text for every key, with the
     // English printf arguments in order. A few read the same everywhere
     // and stay out of the de/fr/it table: the window titles, the key

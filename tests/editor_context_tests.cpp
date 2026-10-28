@@ -1,6 +1,7 @@
 #include "d2d_init.h"
 #include "editor.h"
 #include "editrail.h"
+#include "i18n.h"
 #include "input.h"
 #include "render.h"
 #include "search.h"
@@ -93,6 +94,10 @@ void menuAction(App& app, int action) {
     check(false,"requested menu action is available");
     closeEditCtxMenu(app);
 }
+bool hasChip(const App& app, const char* key) {
+    for (const auto& chip : app.signalChips) if (chip.text == tr(app,key)) return true;
+    return false;
+}
 void select(App& app, size_t start, size_t end) {
     app.editorSelStart = start; app.editorSelEnd = end;
     app.editorCursorPos = end; app.editorHasSelection = start != end;
@@ -163,10 +168,17 @@ void clipboardActions(App& app, const std::wstring& source) {
         {
             ClipboardHolder held(1000);
             check(held.opened, "another program holds the clipboard");
+            app.signalChips.clear();
             right(app,point); menuAction(app,100);
             check(app.editorText == source && app.editorHasSelection, "menu Cut keeps text it could not copy");
+            check(hasChip(app,"toast.clipboard_busy"), "menu Cut says the clipboard is busy");
+            app.signalChips.clear();
             key(app,'X',false,true);
             check(app.editorText == source && app.editorHasSelection, "Ctrl+X keeps text it could not copy");
+            check(hasChip(app,"toast.clipboard_busy"), "Ctrl+X says the clipboard is busy");
+            app.signalChips.clear();
+            key(app,'C',false,true);
+            check(hasChip(app,"toast.clipboard_busy"), "the editor's Ctrl+C says the clipboard is busy");
         }
         {
             ClipboardHolder moment(20);
@@ -178,6 +190,75 @@ void clipboardActions(App& app, const std::wstring& source) {
     }
     check(clipboardEquals(app,elsewhere), "the other application's clipboard is restored");
     check(oleClipboardText() == elsewhere, "OLE applications can paste the restored clipboard");
+}
+
+// The viewer's copies wait a moment for a clipboard another program holds.
+// Held for longer, they copy nothing and say so, claim no copy, and keep a
+// selection they could not copy.
+void viewerCopies(App& app) {
+    ClipboardSnapshot user(app.hwnd);
+    check(user.captured, "user clipboard is preserved for the viewer copies");
+    if (!user.captured) return;
+    exitEditMode(app); ensureLayoutComplete(app);
+    app.scrollX = app.targetScrollX = app.scrollY = app.targetScrollY = 0;
+    const size_t at = app.docText.find(L"selection");
+    check(at != std::wstring::npos && !app.codeBlocks.empty() && !app.tableRects.empty(),
+          "the viewer lays out the fixture's text, code block and table");
+    if (at == std::wstring::npos || app.codeBlocks.empty() || app.tableRects.empty()) return;
+    auto viewSelect = [&] { app.selAnchor = at; app.selFocus = at + 9; app.hasSelection = true; };
+    // A block's Copy button: the rightmost in its top band, brought into view
+    auto pressCopy = [&](const D2D1_RECT_F& bounds, float width) {
+        app.scrollY = app.targetScrollY = std::max(0.0f, bounds.top - 200.0f);
+        float pad = 8.0f * app.contentScale * app.zoomFactor;
+        float right = std::min(bounds.right, app.scrollX + documentViewportWidth(app));
+        D2D1_POINT_2F point{right - pad - dpi(app,width) / 2 - app.scrollX + documentViewportX(app),
+                            bounds.top + pad + dpi(app,13.0f) - app.scrollY};
+        handleMouseMove(app,app.hwnd,MAKELPARAM((int)point.x,(int)point.y));
+        left(app,point);
+    };
+    {
+        ClipboardHolder held(1000);
+        check(held.opened, "another program holds the clipboard for the viewer");
+        viewSelect(); app.signalChips.clear();
+        key(app,'C',false,true);
+        check(app.hasSelection && hasChip(app,"toast.clipboard_busy") && !hasChip(app,"toast.copied"),
+              "viewer Ctrl+C keeps a selection it could not copy and says the clipboard is busy");
+        app.hasSelection = false; app.signalChips.clear();
+        key(app,'C',false,true);
+        check(hasChip(app,"toast.clipboard_busy") && !hasChip(app,"toast.copied"),
+              "copying the whole document claims no copy while the clipboard is held");
+        app.signalChips.clear();
+        pressCopy(app.codeBlocks.front().bounds, 72.0f);
+        check(hasChip(app,"toast.clipboard_busy") && !hasChip(app,"codeblock.copied"),
+              "the code block's Copy says the clipboard is busy");
+        app.signalChips.clear();
+        pressCopy(app.tableRects.front().bounds, 88.0f);
+        check(hasChip(app,"toast.clipboard_busy") && !hasChip(app,"table.copied"),
+              "the table's Copy claims no copy while the clipboard is held");
+        app.signalChips.clear();
+        copyFilePath(app,app.hwnd,app.currentFile);
+        check(hasChip(app,"toast.clipboard_busy") && !hasChip(app,"toast.copied"),
+              "Copy file path says the clipboard is busy");
+    }
+    {
+        ClipboardHolder moment(20);
+        app.scrollY = app.targetScrollY = 0;
+        viewSelect(); app.signalChips.clear();
+        key(app,'C',false,true);
+        check(clipboardEquals(app,L"selection") && !app.hasSelection && hasChip(app,"toast.copied") &&
+                  !hasChip(app,"toast.clipboard_busy"),
+              "viewer Ctrl+C waits for a clipboard held for a moment");
+    }
+    {
+        ClipboardHolder moment(20);
+        app.signalChips.clear();
+        pressCopy(app.tableRects.front().bounds, 88.0f);
+        // clipboardLine reads tabs and line breaks as spaces
+        std::wstring flat = app.tableRects.front().tsv;
+        for (wchar_t& ch : flat) if (ch == L'\t' || ch == L'\r' || ch == L'\n') ch = L' ';
+        check(hasChip(app,"table.copied") && clipboardEquals(app,flat),
+              "the table's Copy waits for a clipboard held for a moment");
+    }
 }
 }
 
@@ -265,6 +346,7 @@ int runEditorContextTests() {
     select(app,0,app.editorText.size()); outside(app,{outsidePoint.x,800},app.editorText.size());
     clipboardActions(app,source);
     app.editorText = source; app.editorDirty = false;
+    viewerCopies(app);
     DestroyWindow(app.hwnd); app.hwnd = nullptr; state.reset(); CoUninitialize();
     OleUninitialize();
     std::cout << "Editor context menu: " << cases << " selection cases, " << failures << " failures\n";
