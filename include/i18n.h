@@ -35,6 +35,10 @@ const wchar_t* tr(int langIndex, const char* key);
 // Convenience overload using app.currentLanguageIndex.
 const wchar_t* tr(const App& app, const char* key);
 
+// Whether a language has its own text for a key rather than falling back
+// to English (its text may still read the same as the English)
+bool languageTranslatesKey(int langIndex, const char* key);
+
 // Detect the user's preferred UI language via GetUserPreferredUILanguages.
 // Returns one of the LANG_INDEX_* values (always English as the last resort).
 int detectSystemLanguage();

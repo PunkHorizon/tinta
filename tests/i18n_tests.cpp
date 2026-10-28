@@ -126,6 +126,23 @@ int main() {
         check(formats(tr(en, entry.key)) == formats(entry.text), "Russian preserves printf arguments and order");
     }
     check(russianKeys.size() == 360, "Russian covers every current interface key");
+    // Every shipped language has its own text for every key, with the
+    // English printf arguments in order. A few read the same everywhere
+    // and stay out of the de/fr/it table: the window titles, the key
+    // profiles, and the sample date (the property strip writes dates in
+    // English)
+    const std::set<std::string> sameEverywhere = {"title.plain", "title.dirty", "title.no_file",
+                                                  "settings.profile.windows", "settings.profile.vim",
+                                                  "fm.absolute"};
+    for (int lang : {zh, ja, ko, de, fr, it, ru}) {
+        for (const auto& entry : russian) {
+            if (sameEverywhere.count(entry.key)) continue;
+            const std::string where = languageIdAt(lang) + " " + entry.key;
+            check(languageTranslatesKey(lang, entry.key), ("translated: " + where).c_str());
+            check(formats(tr(lang, entry.key)) == formats(tr(en, entry.key)),
+                  ("printf arguments kept: " + where).c_str());
+        }
+    }
     check(en == 0, "en is the first registry entry");
     check(zh == 1, "zh is the second registry entry");
     check(de >= 0, "de is registered");
@@ -180,6 +197,16 @@ int main() {
           "Japanese context menu settings");
     check(std::wstring(tr(ko, "confirm.discard")) == L"\uBCC0\uACBD \uBC84\uB9AC\uAE30",
           "Korean discard confirmation");
+
+    // Strings every language gained, and typos fixed in shipped ones
+    check(std::wstring(tr(zh, "fm.section")) == L"\u5143\u6570\u636E", "Chinese frontmatter section");
+    check(std::wstring(tr(ja, "fm.title")) == L"\u30C9\u30AD\u30E5\u30E1\u30F3\u30C8\u306E\u30D7\u30ED\u30D1\u30C6\u30A3", "Japanese frontmatter title");
+    check(std::wstring(tr(fr, "fm.section")) == L"M\u00E9tadonn\u00E9es", "French frontmatter section");
+    check(std::wstring(tr(de, "fm.up_to")) == L"H\u00F6chstens", "German frontmatter limit");
+    check(std::wstring(tr(it, "rail.bold")) == L"Grassetto", "Italian bold button");
+    check(std::wstring(tr(ko, "settings.word_wrap")) == L"\uC790\uB3D9 \uC904\uBC14\uAFC8", "Korean word wrap setting");
+    check(std::wstring(tr(ja, "settings.footer")) == L"ESC\u3067\u9589\u3058\u308B \u2022 \u5909\u66F4\u306F\u3059\u3050\u306B\u53CD\u6620", "Japanese settings footer");
+    check(std::wstring(tr(ja, "settings.section.editor")) == L"\u30A8\u30C7\u30A3\u30BF\u30FC", "Japanese editor section");
 
     // Keys left out of the built-in table fall back to English
     check(std::wstring(tr(de, "title.no_file")) == L"Tinta",

@@ -210,7 +210,8 @@ void renderFrontmatterSettings(App& app,const D2D1_RECT_F& area) {
         size_t before=app.settingsHits.size();
         button(app,{sideX,ry+7*s,sideX+25*s,ry+30*s},tr(app,"fm.left_short"),id+2,!r.right,details);
         button(app,{sideX+25*s,ry+7*s,sideX+50*s,ry+30*s},tr(app,"fm.right_short"),id+3,r.right,details);
-        button(app,{labelX+2*s,ry+7*s,labelX+34*s,ry+30*s},tr(app,r.label?"fm.label.on":"fm.label.off"),id+4,r.label,details);
+        // Wide enough for the longer yes/no words (French "Non")
+        button(app,{labelX+2*s,ry+7*s,labelX+40*s,ry+30*s},tr(app,r.label?"fm.label.on":"fm.label.off"),id+4,r.label,details);
         auto opts=fm::formats(r.hint);auto f=std::find(opts.begin(),opts.end(),r.format)==opts.end()?opts.front():r.format;
         std::wstring desc=tr(app,formatKey(f));
         if(r.hint==fm::Kind::List&&f!=fm::Format::Count&&r.limit)desc+=L" \u00b7 "+std::to_wstring(r.limit);
