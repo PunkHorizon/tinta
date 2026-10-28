@@ -117,6 +117,27 @@ void layoutTests(App& app) {
     }
 }
 
+// Outlook's compose font reaches Word-based editors only: mso- properties,
+// which browsers drop, so web mail keeps its own font (#285)
+void composeFontTests() {
+    const std::string personal =
+        "<html>\n<head>\n<style>\n /* Style Definitions */\n span.PersonalComposeStyle\n"
+        "\t{mso-style-name:\"Personal Compose Style\";\n\tmso-style-type:personal-compose;\n"
+        "\tmso-ansi-font-size:11.0pt;\n\tmso-bidi-font-size:11.0pt;\n"
+        "\tfont-family:\"Aptos\",sans-serif;\n\tmso-ascii-font-family:Aptos;\n"
+        "\tmso-hansi-font-family:Aptos;\n\tmso-bidi-font-family:\"Times New Roman\";\n"
+        "\tcolor:windowtext;}\n</style>\n</head>\n</html>\n";
+    std::string css = composeFontCss(personal);
+    check(css == "mso-ascii-font-family:Aptos;mso-hansi-font-family:Aptos;mso-ansi-font-size:11.0pt;",
+          "Outlook's compose font becomes mso- properties only: " + css);
+    css = composeFontCss("{font-family:\"Segoe UI\",sans-serif;\nmso-ansi-font-size:12.0pt;}");
+    check(css == "mso-ascii-font-family:\"Segoe UI\";mso-hansi-font-family:\"Segoe UI\";"
+                 "mso-ansi-font-size:12.0pt;",
+          "without mso- faces, the first face of the plain list: " + css);
+    check(composeFontCss("{font-family:Aptos'><b>;}").empty() && composeFontCss("").empty(),
+          "markup in a value, or no compose font, gives no style");
+}
+
 std::string clipboardFormat(HWND hwnd, UINT format) {
     std::string out;
     if (!ClipboardSnapshot::open(hwnd)) { check(false, "clipboard opens for inspection"); return out; }
@@ -174,6 +195,7 @@ int main(int argc, char** argv) {
         layoutDocument(app);
         layoutTests(app);
     }
+    composeFontTests();
     if (testClipboard) clipboardTests(app);
     std::cout << "Rich copy: " << failures << " failures"
               << (testClipboard ? "" : " (clipboard checks require --clipboard-test)") << '\n';

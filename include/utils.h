@@ -34,6 +34,10 @@ bool copyRichTextToClipboard(HWND hwnd, const std::wstring& text,
                              const std::wstring& htmlFragment);
 // The CF_HTML payload (UTF-8, with its offset header) for a fragment
 std::string clipboardHtml(const std::wstring& htmlFragment);
+// Outlook's compose font (its ComposeFontComplex style) as CSS that only
+// Word-based editors read: a paste into Outlook matches the mail around
+// it, and web mail keeps its own font
+std::string composeFontCss(const std::string& style);
 // What a code block's Copy button puts on the clipboard: its lines without
 // the line break that ends the last one (#269)
 std::wstring codeCopyText(const std::wstring& code);

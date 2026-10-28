@@ -9,9 +9,10 @@ plain text as before, and an `HTML Format` (CF_HTML) fragment in which
 and web mail read the HTML; plain-text targets are unchanged.
 
 When Outlook has stored a compose font (`ComposeFontComplex` under
-`HKCU\Software\Microsoft\Office\16.0\Common\MailSettings`), the fragment uses
-that font family and size, so the pasted text matches the mail around it
-instead of falling back to Times New Roman.
+`HKCU\Software\Microsoft\Office\16.0\Common\MailSettings`), the fragment
+carries that face and size as `mso-` properties, so a paste into Outlook
+matches the mail around it instead of falling back to Times New Roman.
+Browsers drop those properties, so web mail keeps its own font.
 
 ## Native regression checks
 
@@ -89,3 +90,21 @@ Fonts, as observed on that machine:
   editors that handle the paste themselves were not checked.
 
 Evidence is in `out/verify-285/` (ignored).
+
+## Compose font for Word-based editors only (2026-10-28)
+
+The compose font used to be written as `font-family` and `font-size` on
+the wrapper. Word applies those, but so does a browser's editor, where
+they replaced the web mail's own font. `composeFontCss` now writes the face
+as `mso-ascii-font-family` and `mso-hansi-font-family` (from the compose
+style's own, or the first face of its `font-family` list) and the size as
+`mso-ansi-font-size`. Word, and so Outlook, applies these, as the runs
+above showed for a face and size given only that way; Chromium's editing
+pipeline drops them. Markup in a value still gives no style.
+
+`rich_copy` checks the style built from an Outlook-like `ComposeFontComplex`
+(a Personal Compose Style in Aptos 11 pt, with a Times New Roman bidi face
+that stays out), the fallback to the plain list's first face, and that a
+value with markup, or no compose font, gives none. The exact new style was
+not pasted into Word again: the harness only uses a clipboard it can put
+back, and this time it held an image.
