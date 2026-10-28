@@ -42,8 +42,9 @@ discarded.
 
 ## Limitations
 
-- Only bold carries over; italics, links, headings and lists paste as the
-  plain text they did before.
+- Bold, italics and web and mail links carry over (italics and links since
+  2026-10-28, below); headings and lists paste as the plain text they did
+  before.
 - Copy with nothing selected (Ctrl+C copies the whole document's text) stays
   plain text.
 - New Outlook and web mail were not checked by hand; they read standard
@@ -108,3 +109,27 @@ that stays out), the fallback to the plain list's first face, and that a
 value with markup, or no compose font, gives none. The exact new style was
 not pasted into Word again: the harness only uses a clipboard it can put
 back, and this time it held an image.
+
+## Italics and links (2026-10-28)
+
+The copy now carries italics as `<i>` and links as `<a href>`, nested as
+link, bold, italic, so the tags always close in order; only the levels
+that change close and reopen. Only links that lead outside the document
+become links (`http:`, `https:`, `mailto:`); a link to a heading, a wiki
+link or a file reference would lead nowhere from a mail, so it pastes as
+its text. A link's address is escaped in its attribute.
+
+The fixture gained an italic phrase in its intro, a link to a heading,
+bold italic text and a bold link whose address has an `&`. `rich_copy`
+checks the italic spans, the web link, the heading link as plain text, bold
+italic as `<b><i>`, the bold link as `<a href="...&amp;..."><b>`, and that a
+relayout records each italic span and web link once. Not recording
+italics fails 6 checks; recording every link fails 4.
+
+Word 16.0.20527 opened the copy of the whole fixture as an HTML file
+(written by `rich_copy_tests --dump-html`, through COM, read-only, so the
+clipboard, which held an image, was not touched): 2 hyperlinks, to
+`https://example.com/` and `https://example.org/?a=1&b=2`, the heading
+link not one of them, and italic runs on exactly "italic words", "italic"
+and the bold "bold italic". Opening a file takes Word's HTML import as a
+paste does, but it is not the paste itself.

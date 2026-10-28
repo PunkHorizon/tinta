@@ -321,6 +321,8 @@ bool openDocumentSourceInViewer(App& app, const std::wstring& fullPath,
     app.docText.clear();
     std::wstring().swap(app.docTextLower);
     app.docBoldRanges.clear();
+    app.docItalicRanges.clear();
+    app.docLinkRanges.clear();
     app.searchMatches.clear();
     clearSelection(app);  // offsets belong to the old docText
     app.layoutDirty = true;

@@ -91,6 +91,17 @@ void layoutTests(App& app) {
     check(!has(all, L"<b>Dear") && !has(all, L"<b>Best") && !has(all, L"<b>italic") &&
               !has(all, L"<b>a link"),
           "plain, italic and linked text stay unbolded");
+    // Italics and web links carry over too; a link inside the document
+    // pastes as its text, as it would lead nowhere from a mail
+    check(has(all, L"<i>italic words</i> italic") && has(all, L"<i>italic</i> stays italic"),
+          "italics are <i> spans");
+    check(has(all, L"<a href=\"https://example.com\">a link</a>"),
+          "a web link is an <a href> around its text");
+    check(has(all, L"a heading link pastes") && !has(all, L"#message"),
+          "a link to a heading pastes as its text");
+    check(has(all, L"<b><i>bold italic</i></b>"), "bold italic nests <i> in <b>");
+    check(has(all, L"<a href=\"https://example.org/?a=1&amp;b=2\"><b>a bold link</b></a>"),
+          "a bold link nests <b> in <a>, its address escaped");
     check(!has(all, L"<b>Rich copy") && !has(all, L"<b>Message"),
           "headings copy as their text, as before");
 
@@ -107,8 +118,12 @@ void layoutTests(App& app) {
 
     // A rebuilt layout leaves no stale ranges behind
     size_t ranges = app.docBoldRanges.size();
+    size_t italics = app.docItalicRanges.size(), links = app.docLinkRanges.size();
     layoutDocument(app);
     check(app.docBoldRanges.size() == ranges, "relayout records each bold span once");
+    check(app.docItalicRanges.size() == italics && italics >= 3 && app.docLinkRanges.size() == links &&
+              links == 2,
+          "relayout records each italic span and web link once");
     for (size_t i = 0; i < app.docBoldRanges.size(); ++i) {
         const auto& r = app.docBoldRanges[i];
         check(r.first < r.second && r.second <= text.size() &&
@@ -197,6 +212,14 @@ int main(int argc, char** argv) {
     }
     composeFontTests();
     if (testClipboard) clipboardTests(app);
+    // --dump-html PATH: the copy of the whole fixture (at the 420 px layout
+    // last laid out) as an HTML file, for opening in Word without touching
+    // the clipboard
+    if (argc == 3 && std::string(argv[1]) == "--dump-html") {
+        std::string payload = clipboardHtml(selectionHtmlForRange(app, 0, app.docText.size()));
+        size_t html = payload.find("<html>");
+        std::ofstream(argv[2], std::ios::binary) << payload.substr(html == std::string::npos ? 0 : html);
+    }
     std::cout << "Rich copy: " << failures << " failures"
               << (testClipboard ? "" : " (clipboard checks require --clipboard-test)") << '\n';
     return failures ? 1 : 0;

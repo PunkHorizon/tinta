@@ -141,13 +141,30 @@ static void addTextRun(App& app, LayoutInfo&& info, const D2D1_POINT_2F& pos,
 }
 
 // Records docText[start, end) as bold, joining a range it continues
-static void markBold(App& app, size_t start, size_t end) {
+static void markRange(std::vector<std::pair<size_t, size_t>>& ranges, size_t start, size_t end) {
     if (start >= end) return;
-    auto& ranges = app.docBoldRanges;
     if (!ranges.empty() && ranges.back().second >= start) {
         ranges.back().second = std::max(ranges.back().second, end);
     } else {
         ranges.push_back({start, end});
+    }
+}
+
+// The styles a copy from the viewer carries (#285): bold, italic, and
+// links that lead somewhere outside the document. Anchors, wiki links and
+// file references would lead nowhere from a mail, so they paste as text.
+static void markStyles(App& app, const InlineStyle& style, bool isLink, const std::string& url,
+                       size_t start, size_t end) {
+    if (style.bold) markRange(app.docBoldRanges, start, end);
+    if (style.italic) markRange(app.docItalicRanges, start, end);
+    if (!isLink || start >= end ||
+        !(url.rfind("http://", 0) == 0 || url.rfind("https://", 0) == 0 || url.rfind("mailto:", 0) == 0))
+        return;
+    auto& links = app.docLinkRanges;
+    if (!links.empty() && links.back().url == url && links.back().end >= start) {
+        links.back().end = std::max(links.back().end, end);
+    } else {
+        links.push_back({start, end, url});
     }
 }
 
@@ -194,9 +211,13 @@ static void rollbackTo(App& app, const LayoutSnapshot& s) {
     app.textRects.resize(s.textRects);
     app.lineBuckets.resize(s.lineBuckets);
     app.docText.resize(s.docTextLen);
-    auto& bold = app.docBoldRanges;
-    while (!bold.empty() && bold.back().first >= s.docTextLen) bold.pop_back();
-    if (!bold.empty()) bold.back().second = std::min(bold.back().second, s.docTextLen);
+    for (auto* ranges : {&app.docBoldRanges, &app.docItalicRanges}) {
+        while (!ranges->empty() && ranges->back().first >= s.docTextLen) ranges->pop_back();
+        if (!ranges->empty()) ranges->back().second = std::min(ranges->back().second, s.docTextLen);
+    }
+    auto& links = app.docLinkRanges;
+    while (!links.empty() && links.back().start >= s.docTextLen) links.pop_back();
+    if (!links.empty()) links.back().end = std::min(links.back().end, s.docTextLen);
     app.taskRects.resize(s.tasks);
     app.htmlAnchors.resize(s.anchors);  // a trial layout's anchors sit at trial positions
 }
@@ -637,7 +658,7 @@ static void layoutInlineContent(App& app, const std::vector<ElementPtr>& element
                            codeDocStart, text.length(), true);
 
                 app.docText += text;
-                if (run.style.bold) markBold(app, codeDocStart, app.docText.size());
+                markStyles(app, run.style, isLink, linkUrl, codeDocStart, app.docText.size());
                 if (isLink) addLinkSegment(x, x + textWidth, y, linkUrl, color);
                 if (hasUnderline) {
                     addUnderline(run.style, x, x + textWidth, y, y + drawYOffset + baselineOf(textFormat),
@@ -1028,7 +1049,7 @@ static void layoutInlineContent(App& app, const std::vector<ElementPtr>& element
         if (measureInfo.layout) measureInfo.layout->Release();
 
         app.docText += text;
-        if (run.style.bold) markBold(app, textDocStart, app.docText.size());
+        markStyles(app, run.style, isLink, linkUrl, textDocStart, app.docText.size());
 
         if (isLink && lastWordEndX > linkLineStartX) {
             addLinkSegment(linkLineStartX, lastWordEndX, linkLineY, linkUrl, color);

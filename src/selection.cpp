@@ -234,32 +234,70 @@ std::wstring selectionTextForRange(const App& app, size_t start, size_t end) {
     return app.docText.substr(start, end - start);
 }
 
+// A link's address as an HTML attribute value
+static std::wstring hrefAttribute(const std::string& url) {
+    std::wstring out;
+    for (wchar_t c : toWide(url)) {
+        switch (c) {
+            case L'&': out += L"&amp;"; break;
+            case L'<': out += L"&lt;"; break;
+            case L'>': out += L"&gt;"; break;
+            case L'"': out += L"&quot;"; break;
+            default: out += c; break;
+        }
+    }
+    return out;
+}
+
 std::wstring selectionHtmlForRange(const App& app, size_t start, size_t end) {
     start = std::min(start, app.docText.size());
     end = std::min(end, app.docText.size());
     std::wstring html;
-    auto range = app.docBoldRanges.begin();
-    bool inBold = false;
+    auto bold = app.docBoldRanges.begin();
+    auto italic = app.docItalicRanges.begin();
+    auto link = app.docLinkRanges.begin();
+    // What is open: a link around bold around italic, so the tags nest
+    const App::DocLinkRange* inLink = nullptr;
+    bool inBold = false, inItalic = false;
+    auto closeFrom = [&](bool linkToo, bool boldToo, bool italicToo) {
+        if (italicToo && inItalic) { html += L"</i>"; inItalic = false; }
+        if (boldToo && inBold) { html += L"</b>"; inBold = false; }
+        if (linkToo && inLink) { html += L"</a>"; inLink = nullptr; }
+    };
     bool inLine = false;
     bool lineStart = true;
     for (size_t i = start; i < end; i++) {
-        while (range != app.docBoldRanges.end() && range->second <= i) ++range;
-        bool bold = range != app.docBoldRanges.end() && range->first <= i;
+        while (bold != app.docBoldRanges.end() && bold->second <= i) ++bold;
+        while (italic != app.docItalicRanges.end() && italic->second <= i) ++italic;
+        while (link != app.docLinkRanges.end() && link->end <= i) ++link;
         wchar_t c = app.docText[i];
         if (c == L'\r') continue;
         // Each line is a <div>, so Word and Outlook paste a paragraph per
         // line as they do the plain text (with <br> the whole copy became
-        // one paragraph); a bold span closes with its line
+        // one paragraph); what is open closes with its line
         if (c == L'\n') {
-            if (inBold) { html += L"</b>"; inBold = false; }
+            closeFrom(true, true, true);
             html += inLine ? L"</div>\r\n" : L"<div><br></div>\r\n";
             inLine = false;
             lineStart = true;
             continue;
         }
         if (!inLine) { html += L"<div>"; inLine = true; }
-        if (inBold && !bold) { html += L"</b>"; inBold = false; }
-        if (bold && !inBold) { html += L"<b>"; inBold = true; }
+        const App::DocLinkRange* wantLink =
+            link != app.docLinkRanges.end() && link->start <= i ? &*link : nullptr;
+        bool wantBold = bold != app.docBoldRanges.end() && bold->first <= i;
+        bool wantItalic = italic != app.docItalicRanges.end() && italic->first <= i;
+        // A change closes its own tag and those inside it, then reopens
+        bool linkChanges = wantLink != inLink;
+        bool boldChanges = linkChanges || wantBold != inBold;
+        bool italicChanges = boldChanges || wantItalic != inItalic;
+        closeFrom(linkChanges, boldChanges, italicChanges);
+        if (linkChanges && wantLink) {
+            html += L"<a href=\"" + hrefAttribute(wantLink->url) + L"\">";
+            inLink = wantLink;
+        }
+        if (boldChanges && wantBold) { html += L"<b>"; inBold = true; }
+        if (italicChanges && wantItalic) { html += L"<i>"; inItalic = true; }
         switch (c) {
             case L'&': html += L"&amp;"; break;
             case L'<': html += L"&lt;"; break;
@@ -277,7 +315,7 @@ std::wstring selectionHtmlForRange(const App& app, size_t start, size_t end) {
         }
         lineStart = false;
     }
-    if (inBold) html += L"</b>";
+    closeFrom(true, true, true);
     if (inLine) html += L"</div>";
     return html;
 }
